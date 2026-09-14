@@ -71,20 +71,34 @@ function initSupabase(){
 }
 initSupabase(); // run once as soon as the script loads, before the app renders
 
+let SB_LAST_ERROR="";
 async function loadAll(){
-  if(!SB_READY&&!initSupabase())return null;
+  if(!SB_READY&&!initSupabase())return{ok:false,data:null,error:"Supabase isn't configured (missing/placeholder URL or key)."};
   try{
     const{data,error}=await SB.from("app_storage").select("value").eq("key",STORE_KEY).maybeSingle();
     if(error)throw error;
-    return data&&data.value?JSON.parse(data.value):null;
-  }catch(e){ console.error("[License Tracker] load failed",e); return null; }
+    SB_LAST_ERROR="";
+    return{ok:true,data:data&&data.value?JSON.parse(data.value):null,error:""};
+  }catch(e){
+    const msg=(e&&e.message)||String(e);
+    console.error("[License Tracker] load failed",e);
+    SB_LAST_ERROR=msg;
+    return{ok:false,data:null,error:msg};
+  }
 }
 async function saveAll(data){
-  if(!SB_READY&&!initSupabase())return;
+  if(!SB_READY&&!initSupabase())return{ok:false,error:"Supabase isn't configured."};
   try{
     const{error}=await SB.from("app_storage").upsert({key:STORE_KEY,value:JSON.stringify(data),updated_at:new Date().toISOString()});
     if(error)throw error;
-  }catch(e){ console.error("[License Tracker] save failed",e); }
+    SB_LAST_ERROR="";
+    return{ok:true,error:""};
+  }catch(e){
+    const msg=(e&&e.message)||String(e);
+    console.error("[License Tracker] save failed",e);
+    SB_LAST_ERROR=msg;
+    return{ok:false,error:msg};
+  }
 }
 
 const DEF_L=[
@@ -166,7 +180,7 @@ const ST=[
 ].map(r=>({id:r[0],name:r[1],city:r[2],brand:r[3],lics:r[4].split(",")}));
 
 const FI={Maharashtra:{tl:"Municipal",fssai:"₹2K-5K",se:"₹500-2.5K",clra:"₹1.5K-5K",ops:"₹1K-3K",fire:"₹5K-15K",ptec:"₹2.5K/yr",total:"₹35K-85K"},Karnataka:{tl:"₹5K-25K",fssai:"₹2K-5K",se:"₹500-2K",clra:"₹1.5K-5K",ops:"₹500-2K",fire:"₹5K-15K",ptec:"₹2.5K/yr",total:"₹40K-1.05L"},Delhi:{tl:"₹3K-10K",fssai:"₹2K-5K",se:"₹500-1.5K",clra:"₹1.5K-5K",ops:"₹1K-3K",fire:"₹5K-20K",ptec:"NA",total:"₹30K-85K"}};
-const GD="https://drive.google.com/drive/folders/1KvW20XmT7GiimLuI1mwOZyvYd4GuI7yB?usp=sharing";
+const GD="https://drive.google.com/drive/folders/1tjsyEf8OcmePcUWSHDhwH8SuSN3f0ybW?usp=drive_link";
 const US={"Bizops@2026":"Zippee@1234","admin":"admin123"};
 
 // ---------- LEDGER / BILLING defaults (from Charge Sheet) ----------
@@ -222,23 +236,23 @@ async function extractDatesFromFile(file){
   const isImage=file.type.startsWith("image/");
   if(!isPdf&&!isImage)throw new Error("Upload an image (JPG/PNG) or a PDF");
   const base64=await fileToBase64(file);
-  const contentBlock=isPdf
-    ?{type:"document",source:{type:"base64",media_type:"application/pdf",data:base64}}
-    :{type:"image",source:{type:"base64",media_type:file.type,data:base64}};
-  const resp=await fetch("https://api.anthropic.com/v1/messages",{
+  // Calls a same-origin Cloudflare Pages Function (see functions/api/extract-dates.js)
+  // which holds the real Anthropic API key server-side. A direct browser->Anthropic
+  // call cannot work once this app is deployed outside claude.ai — there is no key
+  // to send and no proxy to authenticate the request, so this must go through your
+  // own backend endpoint instead.
+  const resp=await fetch("/api/extract-dates",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({
-      model:"claude-sonnet-4-6",
-      max_tokens:1000,
-      messages:[{role:"user",content:[
-        contentBlock,
-        {type:"text",text:"This is a government business license / certificate document. Read it carefully and extract these fields. Reply with ONLY raw JSON, no markdown fences, no explanation, in exactly this shape: {\"issue_date\":\"YYYY-MM-DD or null\",\"applied_date\":\"YYYY-MM-DD or null\",\"expiry_date\":\"YYYY-MM-DD or null\",\"validity_months\":number or null,\"application_number\":\"string or null\",\"license_number\":\"string or null\"}. Convert any date you find (e.g. DD/MM/YYYY, DD-MM-YYYY, Month DD YYYY) into YYYY-MM-DD. license_number is the license/registration/certificate number itself (e.g. an FSSAI license number, a trade license number, a certificate number) — this is often different from application_number, which is a tracking number issued while the application was being processed. If a field is not visible anywhere in the document, use null for it. Do not guess dates or numbers that are not present."}
-      ]}]
-    })
+    body:JSON.stringify({mediaType:isPdf?"application/pdf":file.type,base64,isPdf})
   });
-  if(!resp.ok)throw new Error("API error "+resp.status);
+  if(!resp.ok){
+    let detail="";
+    try{ detail=(await resp.json()).error||""; }catch(e){ try{ detail=await resp.text(); }catch(e2){} }
+    throw new Error("Extraction endpoint error "+resp.status+(detail?": "+String(detail).slice(0,200):" — is functions/api/extract-dates.js deployed with an ANTHROPIC_API_KEY secret set?"));
+  }
   const data=await resp.json();
+  if(data.error)throw new Error(data.error);
   const textBlocks=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
   const clean=textBlocks.replace(/```json|```/g,"").trim();
   const parsed=JSON.parse(clean);
@@ -402,6 +416,7 @@ function NV({pg,go,n,u,lo}){
 
 function App(){
   const[li,setLi]=useState(false);const[lI,setLI]=useState("");const[lP,setLP]=useState("");const[lE,setLE]=useState("");const[lU,setLU]=useState("");
+  const[syncErr,setSyncErr]=useState("");
   const doL=()=>{if(US[lI]&&US[lI]===lP){setLi(true);setLU(lI);setLE("");}else setLE("Invalid credentials");};
   if(!li)return<div style={{background:"linear-gradient(135deg,#0F172A,#1E293B)",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
     <div style={{width:"100%",maxWidth:420,textAlign:"center"}} className="fi">
@@ -418,11 +433,15 @@ function App(){
       </div>
     </div>
   </div>;
-  return<M u={lU} lo={()=>{setLi(false);setLI("");setLP("");setLU("");}}/>;
+  return<>
+    {syncErr&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,background:"#7C2D12",color:"#FDBA74",fontSize:12,fontWeight:700,padding:"9px 16px",textAlign:"center",boxShadow:"0 2px 10px rgba(0,0,0,.2)"}}>⚠️ Not synced with Supabase — your last change may NOT be saved: {syncErr}. Data shown may be stale/default until this is fixed (check Table Editor + browser console).</div>}
+    <M u={lU} lo={()=>{setLi(false);setLI("");setLP("");setLU("");}} onSyncStatus={setSyncErr}/>
+  </>;
 }
 
-function M({u,lo}){
+function M({u,lo,onSyncStatus}){
   const[ready,setReady]=useState(false);
+  const[loadFailed,setLoadFailed]=useState(false);
   const[customL,setCustomL]=useState([]);
   const[customV,setCustomV]=useState([]);
   const[st,setSt]=useState(ST);
@@ -437,7 +456,16 @@ function M({u,lo}){
   // ---- load once on mount ----
   useEffect(()=>{
     (async()=>{
-      const d=await loadAll();
+      const res=await loadAll();
+      onSyncStatus&&onSyncStatus(res.ok?"":res.error);
+      if(!res.ok){
+        // load failed (bad credentials, RLS, network, missing table...) — do NOT let autosave
+        // silently overwrite whatever real data is sitting in Supabase with blank defaults.
+        setLoadFailed(true);
+        setReady(true);
+        return;
+      }
+      const d=res.data;
       if(d){
         if(d.customL)setCustomL(d.customL);
         if(d.customV)setCustomV(d.customV);
@@ -454,16 +482,19 @@ function M({u,lo}){
     })();
   },[]);
 
-  // ---- debounced save whenever anything changes (after initial load) ----
+  // ---- debounced save whenever anything changes (after a *successful* initial load) ----
   const saveTimer=useRef(null);
   useEffect(()=>{
-    if(!ready)return;
+    if(!ready||loadFailed)return;
     if(saveTimer.current)clearTimeout(saveTimer.current);
     saveTimer.current=setTimeout(()=>{
-      saveAll({customL,customV,st,ld,fe,cf,hi,rates,lg,sheets});
+      (async()=>{
+        const r=await saveAll({customL,customV,st,ld,fe,cf,hi,rates,lg,sheets});
+        onSyncStatus&&onSyncStatus(r.ok?"":r.error);
+      })();
     },600);
     return ()=>{if(saveTimer.current)clearTimeout(saveTimer.current);};
-  },[ready,customL,customV,st,ld,fe,cf,hi,rates,lg,sheets]);
+  },[ready,loadFailed,customL,customV,st,ld,fe,cf,hi,rates,lg,sheets]);
 
   const L=useMemo(()=>[...DEF_L,...customL],[customL]);
   const VENDORS=useMemo(()=>[...DEF_VENDORS,...customV],[customV]);
@@ -478,7 +509,7 @@ function M({u,lo}){
     const col=EXTRA_COLORS[idx%EXTRA_COLORS.length];
     const ico=EXTRA_ICONS[idx%EXTRA_ICONS.length];
     const newL={k:key,l:newLicName.trim(),i:ico,bg:"linear-gradient(135deg,"+col+"15,"+col+"25)",f:col+"15",b:col+"33",c:col};
-    setCustomL(p=>[...p,newL]);
+    setCustomL(p=>[newL,...p]);
     setNewLicName("");
     setAddLicModal(false);
   };
@@ -631,12 +662,12 @@ function M({u,lo}){
       <div style={{...s.cd,padding:0,overflow:"auto",maxHeight:"62vh",borderRadius:14}}>
         <table style={{borderCollapse:"collapse",minWidth:2500}}>
           <thead><tr>
-            <th style={{...s.th,position:"sticky",left:0,zIndex:5,background:"#4338CA",color:"#fff",minWidth:200}} rowSpan={2}>Store</th>
-            <th style={{...s.th,background:"#4338CA",color:"#fff"}} rowSpan={2}>City</th>
-            <th style={{...s.th,background:"#4338CA",color:"#fff"}} rowSpan={2}>Brand</th>
-            {L.map(l=><th key={l.k} colSpan={8} style={{...s.th,background:l.c,color:"#fff",textAlign:"center",borderLeft:"3px solid rgba(255,255,255,.2)",fontSize:11}}>{l.i} {l.l}</th>)}
-            <th style={{...s.th,background:"#4338CA",color:"#fff"}} rowSpan={2}>Remarks</th>
-          </tr><tr>{L.map(l=>["Applied","Issued","Valid.","Expiry","Days","Renew","Link","Lic.#"].map((h,i)=><th key={l.k+h} style={{...s.th,background:l.f,color:l.c,textAlign:"center",fontSize:9,borderLeft:i===0?"3px solid "+l.b:"none",fontWeight:700,padding:"6px 4px"}}>{h}</th>))}</tr></thead>
+            <th style={{...s.th,position:"sticky",left:0,top:0,zIndex:6,background:"#4338CA",color:"#fff",minWidth:200}} rowSpan={2}>Store</th>
+            <th style={{...s.th,top:0,background:"#4338CA",color:"#fff"}} rowSpan={2}>City</th>
+            <th style={{...s.th,top:0,background:"#4338CA",color:"#fff"}} rowSpan={2}>Brand</th>
+            {L.map(l=><th key={l.k} colSpan={8} style={{...s.th,top:0,background:l.c,color:"#fff",textAlign:"center",borderLeft:"3px solid rgba(255,255,255,.2)",fontSize:11,height:36}}>{l.i} {l.l}</th>)}
+            <th style={{...s.th,top:0,background:"#4338CA",color:"#fff"}} rowSpan={2}>Remarks</th>
+          </tr><tr>{L.map(l=>["Applied","Issued","Valid.","Expiry","Days","Renew","Link","Lic.#"].map((h,i)=><th key={l.k+h} style={{...s.th,top:36,background:l.f,color:l.c,textAlign:"center",fontSize:9,borderLeft:i===0?"3px solid "+l.b:"none",fontWeight:700,padding:"6px 4px"}}>{h}</th>))}</tr></thead>
           <tbody>{ef.map((x,ri)=>{const bg=ri%2===0?"#fff":"#FAFBFC";return<tr key={x.id} className="hr">
             <td style={{...s.td,fontWeight:700,position:"sticky",left:0,background:bg,zIndex:1,whiteSpace:"nowrap",fontSize:12}}>{x.name}</td>
             <td style={{...s.td,color:"#6B7280",background:bg,fontSize:12}}>{x.city}</td>
@@ -967,7 +998,7 @@ function LedgerPage({st,L,VENDORS,ALLV,rates,setRates,lg,getLg,setLgField,comput
     const col=EXTRA_COLORS[idx%EXTRA_COLORS.length];
     const ico=EXTRA_ICONS[idx%EXTRA_ICONS.length];
     const newL={k:key,l:nbNewLicName.trim(),i:ico,bg:"linear-gradient(135deg,"+col+"15,"+col+"25)",f:col+"15",b:col+"33",c:col};
-    setCustomL(p=>[...p,newL]);
+    setCustomL(p=>[newL,...p]);
     setNbLic(key);
     setNbNewLicName("");
     setNbAddingNew(false);
