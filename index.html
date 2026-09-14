@@ -110,7 +110,7 @@ const W=[
   {k:"an",l:"Application No.",t:"tx",g:"📝 Application"},
   {k:"td",l:"Tentative Date",t:"dt",g:"📝 Application"},
   {k:"amt",l:"Amount (₹)",t:"nm",g:"💰 Fee Reference"},
-  {k:"idt",l:"Issue Date",t:"dt",g:"✅ Status"},{k:"rec",l:"License Received",t:"ck",g:"✅ Status"},
+  {k:"idt",l:"Issue Date",t:"dt",g:"✅ Status"},{k:"lno",l:"License / Registration Number",t:"tx",g:"✅ Status"},{k:"rec",l:"License Received",t:"ck",g:"✅ Status"},
   {k:"val",l:"Validity (months)",t:"nm",g:"✅ Status"},
   {k:"act",l:"Action Taken",t:"ta",g:"✅ Status"},{k:"rem",l:"Remarks",t:"ta",g:"✅ Status"},
 ];
@@ -233,7 +233,7 @@ async function extractDatesFromFile(file){
       max_tokens:1000,
       messages:[{role:"user",content:[
         contentBlock,
-        {type:"text",text:"This is a government business license / certificate document. Read it carefully and extract these fields. Reply with ONLY raw JSON, no markdown fences, no explanation, in exactly this shape: {\"issue_date\":\"YYYY-MM-DD or null\",\"applied_date\":\"YYYY-MM-DD or null\",\"expiry_date\":\"YYYY-MM-DD or null\",\"validity_months\":number or null,\"application_number\":\"string or null\"}. Convert any date you find (e.g. DD/MM/YYYY, DD-MM-YYYY, Month DD YYYY) into YYYY-MM-DD. If a field is not visible anywhere in the document, use null for it. Do not guess dates that are not present."}
+        {type:"text",text:"This is a government business license / certificate document. Read it carefully and extract these fields. Reply with ONLY raw JSON, no markdown fences, no explanation, in exactly this shape: {\"issue_date\":\"YYYY-MM-DD or null\",\"applied_date\":\"YYYY-MM-DD or null\",\"expiry_date\":\"YYYY-MM-DD or null\",\"validity_months\":number or null,\"application_number\":\"string or null\",\"license_number\":\"string or null\"}. Convert any date you find (e.g. DD/MM/YYYY, DD-MM-YYYY, Month DD YYYY) into YYYY-MM-DD. license_number is the license/registration/certificate number itself (e.g. an FSSAI license number, a trade license number, a certificate number) — this is often different from application_number, which is a tracking number issued while the application was being processed. If a field is not visible anywhere in the document, use null for it. Do not guess dates or numbers that are not present."}
       ]}]
     })
   });
@@ -266,9 +266,9 @@ function DocExtract({onApply}){
     setResult(null);setFile(null);
     if(inputRef.current)inputRef.current.value="";
   };
-  const any=result&&(result.issue_date||result.applied_date||result.expiry_date||result.validity_months||result.application_number);
+  const any=result&&(result.issue_date||result.applied_date||result.expiry_date||result.validity_months||result.application_number||result.license_number);
   return<div style={{background:"#F5F3FF",border:"1.5px solid #DDD6FE",borderRadius:12,padding:14,marginBottom:16}}>
-    <div style={{fontSize:12,fontWeight:800,color:"#7C3AED",marginBottom:8}}>📄 Auto-fill dates from license document</div>
+    <div style={{fontSize:12,fontWeight:800,color:"#7C3AED",marginBottom:8}}>📄 Auto-fill dates &amp; license number from document</div>
     <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
       <input ref={inputRef} type="file" accept="image/*,application/pdf" onChange={e=>{setFile(e.target.files[0]||null);setResult(null);setErr("");}} style={{fontSize:12,maxWidth:220}}/>
       <button onClick={run} disabled={!file||busy} style={{...s.bt,padding:"7px 16px",opacity:(!file||busy)?.5:1,cursor:(!file||busy)?"not-allowed":"pointer"}}>{busy?"⏳ Reading document...":"🔍 Extract Dates"}</button>
@@ -282,6 +282,7 @@ function DocExtract({onApply}){
         <div>Expiry<br/><strong>{result.expiry_date||"—"}</strong></div>
         <div>Validity<br/><strong>{result.validity_months?result.validity_months+"m":"—"}</strong></div>
         <div>App. No.<br/><strong>{result.application_number||"—"}</strong></div>
+        <div>License No.<br/><strong>{result.license_number||"—"}</strong></div>
       </div>
       <button onClick={apply} style={s.gbt}>✓ Apply to this license</button>
       <span style={{marginLeft:8,color:"#9CA3AF",fontSize:11}}>Please double-check before applying — auto-reading can miss or misread fields.</span>
@@ -628,14 +629,14 @@ function M({u,lo}){
       {eK!=="all"&&<div style={{marginBottom:10,display:"flex",alignItems:"center",gap:8}}><button onClick={()=>setEK("all")} style={{background:"#F3F4F6",border:"none",padding:"4px 12px",borderRadius:8,fontSize:11,fontWeight:600,color:"#6B7280"}}>✕ Clear</button><span style={{fontSize:11,color:"#9CA3AF"}}>{ef.length} stores</span></div>}
       <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}><input value={eQ} onChange={e=>setEQ(e.target.value)} placeholder="🔍 Search..." style={{...s.i,maxWidth:240}}/><select value={eC} onChange={e=>setEC(e.target.value)} style={{...s.i,width:"auto",minWidth:120}}><option value="All">All Cities</option>{ci.map(c=><option key={c}>{c}</option>)}</select><select value={eB} onChange={e=>setEB(e.target.value)} style={{...s.i,width:"auto",minWidth:120}}><option value="All">All Brands</option>{br.map(b=><option key={b}>{b}</option>)}</select></div>
       <div style={{...s.cd,padding:0,overflow:"auto",maxHeight:"62vh",borderRadius:14}}>
-        <table style={{borderCollapse:"collapse",minWidth:1900}}>
+        <table style={{borderCollapse:"collapse",minWidth:2500}}>
           <thead><tr>
             <th style={{...s.th,position:"sticky",left:0,zIndex:5,background:"#4338CA",color:"#fff",minWidth:200}} rowSpan={2}>Store</th>
             <th style={{...s.th,background:"#4338CA",color:"#fff"}} rowSpan={2}>City</th>
             <th style={{...s.th,background:"#4338CA",color:"#fff"}} rowSpan={2}>Brand</th>
-            {L.map(l=><th key={l.k} colSpan={6} style={{...s.th,background:l.c,color:"#fff",textAlign:"center",borderLeft:"3px solid rgba(255,255,255,.2)",fontSize:11}}>{l.i} {l.l}</th>)}
+            {L.map(l=><th key={l.k} colSpan={8} style={{...s.th,background:l.c,color:"#fff",textAlign:"center",borderLeft:"3px solid rgba(255,255,255,.2)",fontSize:11}}>{l.i} {l.l}</th>)}
             <th style={{...s.th,background:"#4338CA",color:"#fff"}} rowSpan={2}>Remarks</th>
-          </tr><tr>{L.map(l=>["Applied","Issued","Valid.","Expiry","Days","Renew"].map((h,i)=><th key={l.k+h} style={{...s.th,background:l.f,color:l.c,textAlign:"center",fontSize:9,borderLeft:i===0?"3px solid "+l.b:"none",fontWeight:700,padding:"6px 4px"}}>{h}</th>))}</tr></thead>
+          </tr><tr>{L.map(l=>["Applied","Issued","Valid.","Expiry","Days","Renew","Link","Lic.#"].map((h,i)=><th key={l.k+h} style={{...s.th,background:l.f,color:l.c,textAlign:"center",fontSize:9,borderLeft:i===0?"3px solid "+l.b:"none",fontWeight:700,padding:"6px 4px"}}>{h}</th>))}</tr></thead>
           <tbody>{ef.map((x,ri)=>{const bg=ri%2===0?"#fff":"#FAFBFC";return<tr key={x.id} className="hr">
             <td style={{...s.td,fontWeight:700,position:"sticky",left:0,background:bg,zIndex:1,whiteSpace:"nowrap",fontSize:12}}>{x.name}</td>
             <td style={{...s.td,color:"#6B7280",background:bg,fontSize:12}}>{x.city}</td>
@@ -651,6 +652,8 @@ function M({u,lo}){
                 <td style={{...s.td,background:cb,fontSize:11,fontWeight:700,color:dy!==null&&dy<30?"#DC2626":"#374151"}}>{na?"NA":fD(ex)}</td>
                 <td style={{...s.td,background:cb,textAlign:"center"}}>{na?<span style={{color:"#D1D5DB",fontSize:10}}>NA</span>:<DT d={dy}/>}</td>
                 <td style={{...s.td,background:cb,textAlign:"center"}}><button onClick={()=>{setRf({ao:"",idt:"",val:""});setRm({sid:x.id,lk:l.k});}} style={{background:"linear-gradient(135deg,#7C3AED,#8B5CF6)",color:"#fff",border:"none",borderRadius:8,padding:"4px 8px",fontSize:9,fontWeight:700,whiteSpace:"nowrap"}}>🔄 Renew</button>{(hi[x.id+"_"+l.k]||[]).length>0&&<div style={{fontSize:8,color:"#7C3AED",fontWeight:700,marginTop:1}}>{hi[x.id+"_"+l.k].length} past</div>}</td>
+                <td style={{...s.td,background:cb}}><div style={{display:"flex",gap:2}}><input value={d.gl||""} onChange={e=>up(x.id,l.k,"gl",e.target.value)} placeholder="G-Drive link..." style={{...s.c,width:100,fontSize:10}}/>{d.gl&&<a href={d.gl} target="_blank" rel="noopener noreferrer" title="Open in Google Drive" style={{background:"#16A34A",color:"#fff",padding:"0 6px",borderRadius:6,fontSize:11,fontWeight:700,textDecoration:"none",display:"flex",alignItems:"center"}}>↗</a>}</div></td>
+                <td style={{...s.td,background:cb}}><input value={d.lno||""} onChange={e=>up(x.id,l.k,"lno",e.target.value)} placeholder="License #..." style={{...s.c,width:110,fontSize:10}}/></td>
               </Fragment>;
             })}
             <td style={{...s.td,background:bg}}><input value={ld[x.id]?.[x.lics[0]]?.rem||""} onChange={e=>{if(x.lics[0])up(x.id,x.lics[0],"rem",e.target.value);}} style={{...s.c,width:110}} placeholder="..."/></td>
@@ -832,6 +835,7 @@ function M({u,lo}){
               if(r.issue_date)up(sid,lk,"idt",r.issue_date);
               if(r.validity_months)up(sid,lk,"val",r.validity_months);
               if(r.application_number)up(sid,lk,"an",r.application_number);
+              if(r.license_number)up(sid,lk,"lno",r.license_number);
             }}/>}
             {gs.map(g=><div key={g} style={{marginBottom:16}}><h4 style={{fontSize:13,fontWeight:800,color:"#374151",borderBottom:"2px solid #F3F4F6",paddingBottom:5,marginBottom:8}}>{g}</h4><div style={{display:"grid",gap:6}}>
               {W.filter(w=>w.g===g).map(w=>{const v=d[w.k];const fi=w.t==="ck"?v===true:(v&&String(v).trim()!=="");const di=lc;const rb=lc?(fi?"#F0FDF4":"#FEF2F2"):"#F9FAFB";const rb2=lc?(fi?"1px solid #BBF7D0":"1px solid #FECACA"):"1px solid #F3F4F6";
@@ -843,7 +847,7 @@ function M({u,lo}){
                     :w.t==="sl"?<select value={d[w.k]||""} onChange={e=>{if(!di)up(sid,lk,w.k,e.target.value);}} disabled={di} style={{...s.i,maxWidth:200,fontSize:12,opacity:di?.7:1}}><option value="">Select...</option>{w.o.map(o=><option key={o}>{o}</option>)}</select>
                     :w.t==="ta"?<textarea value={d[w.k]||""} onChange={e=>{if(!di)up(sid,lk,w.k,e.target.value);}} readOnly={di} style={{...s.i,minHeight:36,resize:"vertical",fontSize:12,opacity:di?.7:1}} placeholder="Enter..."/>
                     :w.t==="ur"?<div style={{display:"flex",gap:6}}><input value={d[w.k]||""} onChange={e=>{if(!di)up(sid,lk,w.k,e.target.value);}} readOnly={di} style={{...s.i,fontSize:12,opacity:di?.7:1}} placeholder="G-Drive link..."/>{d[w.k]&&<a href={d[w.k]} target="_blank" rel="noopener noreferrer" style={{background:"#16A34A",color:"#fff",padding:"6px 12px",borderRadius:6,fontSize:11,fontWeight:700,textDecoration:"none",whiteSpace:"nowrap"}}>Open↗</a>}</div>
-                    :<input type={w.t==="nm"?"number":"text"} value={d[w.k]||""} onChange={e=>{if(!di)up(sid,lk,w.k,e.target.value);}} readOnly={di} style={{...s.i,maxWidth:w.t==="dt"?170:w.k==="an"?520:120,fontSize:12,opacity:di?.7:1}} placeholder={w.k==="an"?"e.g. APP-2025-123456":""}/>}
+                    :<input type={w.t==="nm"?"number":"text"} value={d[w.k]||""} onChange={e=>{if(!di)up(sid,lk,w.k,e.target.value);}} readOnly={di} style={{...s.i,maxWidth:w.t==="dt"?170:(w.k==="an"||w.k==="lno")?520:120,fontSize:12,opacity:di?.7:1}} placeholder={w.k==="an"?"e.g. APP-2025-123456":w.k==="lno"?"e.g. 13326005000552":""}/>}
                   </div>
                 </div>;})}
             </div></div>)}
