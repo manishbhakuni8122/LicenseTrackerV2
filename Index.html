@@ -1,0 +1,1535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>License Tracker - Zippee BizOps</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',sans-serif;background:#F0F2F5;color:#1a1a2e}
+input,select,textarea,button{font-family:inherit}
+::placeholder{color:#a0aec0}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:10px}
+mark{background:#FDE68A;border-radius:3px;padding:0 2px}
+input[type="date"],input[type="checkbox"],select,button{cursor:pointer}
+button{transition:all .15s}
+button:hover{opacity:.9}
+table{border-spacing:0}
+.hr:hover{background:#F5F3FF !important}
+@keyframes fi{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.fi{animation:fi .3s ease}
+@keyframes sp{to{transform:rotate(360deg)}}
+.sp{animation:sp .8s linear infinite}
+</style>
+</head>
+<body><div id="root"></div>
+<script type="text/babel">
+const{useState,useMemo,useEffect,Fragment,useRef}=React;
+
+// ============================================================
+// PERSISTENT STORAGE — Supabase (shared across the whole team)
+// ============================================================
+// SETUP (one time):
+// 1. Create a free project at https://supabase.com
+// 2. In the SQL Editor, run:
+//      create table app_storage (
+//        key text primary key,
+//        value text,
+//        updated_at timestamptz default now()
+//      );
+//      alter table app_storage enable row level security;
+//      create policy "anon read"   on app_storage for select using (true);
+//      create policy "anon insert" on app_storage for insert with check (true);
+//      create policy "anon update" on app_storage for update using (true);
+// 3. Project Settings → API → copy the "Project URL" and "anon public" key into the two
+//    constants below, then deploy this HTML file anywhere (Cloudflare Pages, Netlify, etc).
+const SUPABASE_URL="https://wkgqvranyvnzcqgpxnfv.supabase.co";
+const SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndrZ3F2cmFueXZuemNxZ3B4bmZ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNjU5ODMsImV4cCI6MjEwNDk0MTk4M30.76Uhr7DnYQFJAm2gX9XqUX0S0SBsBXvTwdF9THi0yj8";
+const STORE_KEY="zippee-lt-data-v1";
+
+let SB=null;
+let SB_READY=false;
+function initSupabase(){
+  try{
+    if(!SUPABASE_URL||SUPABASE_URL.indexOf("YOUR-PROJECT")>-1||!SUPABASE_ANON_KEY||SUPABASE_ANON_KEY.indexOf("YOUR-ANON")>-1){
+      console.warn("[License Tracker] Supabase isn't configured yet — paste your Project URL and anon key at the top of the script. Data will NOT be saved until then.");
+      SB_READY=false;
+      return false;
+    }
+    SB=supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+    SB_READY=true;
+    return true;
+  }catch(e){ console.error("[License Tracker] Supabase init failed",e); SB_READY=false; return false; }
+}
+initSupabase(); // run once as soon as the script loads, before the app renders
+
+async function loadAll(){
+  if(!SB_READY&&!initSupabase())return null;
+  try{
+    const{data,error}=await SB.from("app_storage").select("value").eq("key",STORE_KEY).maybeSingle();
+    if(error)throw error;
+    return data&&data.value?JSON.parse(data.value):null;
+  }catch(e){ console.error("[License Tracker] load failed",e); return null; }
+}
+async function saveAll(data){
+  if(!SB_READY&&!initSupabase())return;
+  try{
+    const{error}=await SB.from("app_storage").upsert({key:STORE_KEY,value:JSON.stringify(data),updated_at:new Date().toISOString()});
+    if(error)throw error;
+  }catch(e){ console.error("[License Tracker] save failed",e); }
+}
+
+const DEF_L=[
+  {k:"tl",l:"Trade License",i:"📋",bg:"linear-gradient(135deg,#EEF2FF,#E0E7FF)",f:"#EEF2FF",b:"#C7D2FE",c:"#4F46E5"},
+  {k:"fssai",l:"FSSAI",i:"🍽️",bg:"linear-gradient(135deg,#F0FDF4,#DCFCE7)",f:"#F0FDF4",b:"#BBF7D0",c:"#16A34A"},
+  {k:"se",l:"Shop & Estb.",i:"🏪",bg:"linear-gradient(135deg,#FFF7ED,#FFEDD5)",f:"#FFF7ED",b:"#FED7AA",c:"#EA580C"},
+  {k:"clra",l:"CLRA",i:"👷",bg:"linear-gradient(135deg,#FEF2F2,#FEE2E2)",f:"#FEF2F2",b:"#FECACA",c:"#DC2626"},
+  {k:"ops",l:"24x7 Ops",i:"🕐",bg:"linear-gradient(135deg,#F5F3FF,#EDE9FE)",f:"#F5F3FF",b:"#DDD6FE",c:"#7C3AED"},
+  {k:"fire",l:"Fire NOC",i:"🔥",bg:"linear-gradient(135deg,#FFF1F2,#FFE4E6)",f:"#FFF1F2",b:"#FECDD3",c:"#E11D48"},
+  {k:"ptec",l:"PTEC",i:"💰",bg:"linear-gradient(135deg,#ECFEFF,#CFFAFE)",f:"#ECFEFF",b:"#A5F3FC",c:"#0891B2"},
+];
+
+const EXTRA_COLORS=["#0D9488","#9333EA","#C026D3","#DB2777","#CA8A04","#65A30D","#0284C7","#6D28D9","#BE185D","#B45309"];
+const EXTRA_ICONS=["📑","📝","🏛️","🔑","📜","🪪","🛡️","⚖️","🏗️","📌"];
+
+const W=[
+  {k:"dc",l:"Documents Collected",t:"ck",g:"📋 Documents"},{k:"dv",l:"Documents Verified",t:"ck",g:"📋 Documents"},
+  {k:"vb",l:"Verified By",t:"tx",g:"📋 Documents"},{k:"gl",l:"Google Drive Link",t:"ur",g:"📋 Documents"},
+  {k:"sv",l:"Sent to Vendor",t:"ck",g:"🏢 Vendor"},
+  {k:"vs",l:"Vendor Response",t:"sl",o:["Awaiting","Applied","Responded","Needs More Docs","Rejected"],g:"🏢 Vendor"},
+  {k:"ad",l:"Additional Docs Needed",t:"ta",g:"🏢 Vendor"},
+  {k:"ao",l:"Applied On",t:"dt",g:"📝 Application"},
+  {k:"an",l:"Application No.",t:"tx",g:"📝 Application"},
+  {k:"td",l:"Tentative Date",t:"dt",g:"📝 Application"},
+  {k:"amt",l:"Amount (₹)",t:"nm",g:"💰 Fee Reference"},
+  {k:"idt",l:"Issue Date",t:"dt",g:"✅ Status"},{k:"rec",l:"License Received",t:"ck",g:"✅ Status"},
+  {k:"val",l:"Validity (months)",t:"nm",g:"✅ Status"},
+  {k:"act",l:"Action Taken",t:"ta",g:"✅ Status"},{k:"rem",l:"Remarks",t:"ta",g:"✅ Status"},
+];
+
+const ST=[
+  ["1","ZD SDD Horamavu","Bangalore","ZIPPEE","tl,fssai,se,clra,ops,fire,ptec"],["2","ZD MFC Janakpuri","Delhi","MFC","tl,fssai,se,clra,ops,fire"],
+  ["3","ZD Blep Noida","Delhi NCR","BLEP","tl,fssai,se,clra"],["4","ZD FNP Sarjapur","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],
+  ["5","ZD FNP K R Puram","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],["6","ZD Vadgaon Sheri Pune DVR 2","Pune","ZIPPEE","fssai,se,clra,ops,fire,ptec"],
+  ["7","ZD Periyamet","Chennai","ZIPPEE","tl,fssai,se,clra,ptec"],["8","ZD MT JP Nagar DVR 2","Bangalore","MT","tl,fssai,se,clra,fire,ptec"],
+  ["9","ZD MT Gachibowli DVR 2","Hyderabad","MT","tl,fssai,se,clra,ptec"],["10","ZD FNP Bannerghata","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],
+  ["11","ZD FNP BTM Layout","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],["12","ZD FNP WhiteField","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],
+  ["13","ZD MT Sarjapur DVR 2","Bangalore","Myntra","tl,fssai,se,clra,fire,ptec"],["14","ZD ZL Malad DVR","Mumbai","ZILO","fssai,se,clra,fire,ptec"],
+  ["15","ZD ZL Malad NVR","Mumbai","ZILO","fssai,se,clra,fire,ptec"],["16","ZD FNP Vasant Nagar","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],
+  ["17","ZD FNP RT NAGAR","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],["18","ZD FNP Varthur","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],
+  ["19","ZD MT Begur DVR 2","Bangalore","MT","tl,fssai,se,clra,fire,ptec"],["20","ZD FNP Banaswadi","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],
+  ["21","ZD HQ 5th Floor","Delhi","ZIPPEE","se,fire"],["22","ZD FNP Lamington Road","Mumbai","FNP","fssai,se,clra,ptec"],
+  ["23","ZD FNP Powai","Mumbai","FNP","fssai,se,clra,ptec"],["24","ZD FNP Marathahalli","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],
+  ["25","ZD FNP Electronic City","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],["26","ZD FNP Hebbal","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],
+  ["27","ZD FNP Yelankha","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],["28","ZD FNP Kumarswamy Layout","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],
+  ["29","ZD FNP Colaba","Mumbai","FNP","fssai,se,clra,ptec"],["30","ZD FNP Marol","Mumbai","FNP","fssai,se,clra,ptec"],
+  ["31","ZD FNP Koramangala","Bangalore","FNP","tl,fssai,se,clra,fire,ptec"],["32","ZD MT Brookfield DVR 2","Bangalore","MT","tl,fssai,se,clra,fire,ptec"],
+  ["33","ZD FNP Andheri West","Mumbai","FNP","fssai,se,clra,ptec"],["34","ZD FNP Vashi","Mumbai","FNP","fssai,se,clra,ptec"],
+  ["35","ZD FNP BKC","Mumbai","FNP","fssai,se,clra,ptec"],["36","ZD FNP Lower Parel","Mumbai","FNP","fssai,se,clra,ptec"],
+  ["37","ZD FNP Thane","Mumbai","FNP","fssai,se,clra,ptec"],["38","ZD FNP Mira Road","Mumbai","FNP","fssai,se,clra,ptec"],
+  ["39","ZD FNP Kharghar","Mumbai","FNP","fssai,se,clra,ptec"],["40","ZD FKG Dehradun DVR 3","Dehradun","FKG","tl,fssai,se,clra,fire"],
+  ["41","ZD Topsia","Kolkata","ZIPPEE","tl,fssai,se,clra,ptec"],["42","ZD SRT10 Okhla DVR 2","Delhi NCR","SRT","tl,fssai,se,clra"],
+  ["43","ZD ZL Ghatkopar DVR 2","Mumbai","ZL","fssai,se,clra,ptec"],["44","ZD SRT10 Andheri","Mumbai","SRT","fssai,se,clra,fire,ptec"],
+  ["45","ZD FKG Prayagraj NVR 3","Prayagraj","FKG","fssai,se,clra,ops,fire"],["46","ZD FKG Surat NVR 2","Surat","FKG","se,clra,fire,ptec"],
+  ["47","ZD FKG Nasik NVR 3","Nashik","FKG","fssai,se,clra,ops,fire,ptec"],["48","ZD FKG Vadodara NVR 3","Vadodara","FKG","se,clra,fire,ptec"],
+  ["49","ZD Enchante Dommsandra","Bangalore","Enchante","tl,fssai,se,clra,ptec"],["50","ZD FNP Chembur","Mumbai","FNP","fssai,se,clra,ptec"],
+  ["51","ZD FKG Siliguri NVR 3","Siliguri","FKG","tl,fssai,se,clra,fire"],["52","ZD FKG Moradabad NVR 3","Moradabad","FKG","fssai,se,clra,ops,fire"],
+  ["53","ZD HK Ludhiana","Ludhiana","Health Kart","tl,fssai,se,clra"],["54","ZD HUFT Koramangala","Bangalore","HUFT","tl,fssai,se,clra,fire,ptec"],
+  ["55","ZD SRT10 Koramangala","Bangalore","SRT","tl,fssai,se,clra,ptec"],["56","ZD HY Chakala","Mumbai","HYUE","fssai,se,clra,fire,ptec"],
+  ["57","ZD MT Gachibowli","Hyderabad","MT","tl,fssai,se,ptec"],["58","ZD MT Attapur","Hyderabad","MT","tl,fssai,se,ptec"],
+  ["59","ZD MT Nizampet","Hyderabad","MT","tl,fssai,se,ptec"],["60","ZD MT Manikonda","Hyderabad","MT","tl,fssai,se,ptec"],
+  ["61","ZD ST Behala","Kolkata","ST","tl,fssai,se,clra,ptec"],["62","ZD Okhla DVR 1","Delhi NCR","ZIPPEE","tl,fssai,se,clra"],
+  ["63","ZD Kalyan Nagar DVR 2","Bangalore","ZIPPEE","tl,fssai,se,clra,ops,fire,ptec"],["64","ZD VR Navi Mumbai","Mumbai","VR","fssai,se,clra,ptec"],
+  ["65","ZD CLK Kempapura","Bangalore","CLK","tl,fssai,se,clra,ptec"],["66","ZD Wazipur 2H","Delhi NCR","ZIPPEE","tl,fssai,se,clra"],
+  ["67","ZD Dilshad Garden Libas","Delhi NCR","ZIPPEE","tl,fssai,se,clra"],["68","ZD Gurgaon 2H","Delhi NCR","ZIPPEE","tl,fssai,se,clra"],
+  ["69","ZD Andheri NVR 1","Mumbai","ZIPPEE","fssai,se,clra,ops,ptec"],["70","ZD ST Kalyan Nagar","Bangalore","ST","tl,fssai,se,clra,fire,ptec"],
+  ["71","ZD ST Varthur","Bangalore","ST","tl,fssai,se,clra,fire,ptec"],["72","ZD Andheri DVR 4","Mumbai","ZIPPEE","fssai,se,clra,ops,ptec"],
+  ["73","ZD VR Horamavu","Bangalore","VR","tl,fssai,se,clra,ptec"],["74","ZD MT Sarjapur","Bangalore","MT","tl,fssai,se,clra,fire,ptec"],
+  ["75","ZD MT JP Nagar","Bangalore","MT","tl,fssai,se,clra,fire,ptec"],["76","ZD Andheri","Mumbai","ZIPPEE","fssai,se,clra,ops,ptec"],
+  ["77","ZD Kalyan Nagar","Bangalore","ZIPPEE","tl,fssai,se,clra,ops,fire,ptec"],["78","ZD ST BTM Layout","Bangalore","ST","tl,fssai,se,clra,fire,ptec"],
+  ["79","ZD MT Begur","Bangalore","MT","tl,fssai,se,clra,fire,ptec"],["80","ZD MT Brookfield DVR 1","Bangalore","MT","tl,fssai,se,clra,fire,ptec"],
+  ["81","ZD MN Thyagaraja","Bangalore","MT","tl,fssai,se,clra,fire,ptec"],["82","ZD MT Basaveshwara","Bangalore","MT","tl,fssai,se,clra,fire,ptec"],
+  ["83","ZD MT Kalyan Nagar","Bangalore","MT","tl,fssai,se,clra,fire,ptec"],["84","ZD VR Harmada","Jaipur","VR","tl,fssai,se,clra,ptec"],
+  ["85","ZD VR Noida","Delhi NCR","VR","tl,fssai,se,clra"],["86","ZD Manikonda DVR 2","Hyderabad","ZIPPEE","tl,se,ptec"],
+  ["87","ZD Manikonda DVR 1","Hyderabad","ZIPPEE","tl,se,ptec"],["88","ZD VR Gurgaon DVR 1","Delhi NCR","VR","tl,fssai,se,clra"],
+  ["89","ZD Koramangala","Bangalore","ZIPPEE","tl,fssai,se,clra,fire,ptec"],["90","ZD VR Gurgaon DVR 2","Delhi NCR","VR","tl,fssai,se,clra"],
+  ["91","ZD HQ 3rd Floor","Delhi NCR","ZIPPEE","se,fire"],["92","ZD CC Ghitorni","Delhi NCR","CC","tl,fssai,se,clra"],
+  ["93","ZD MT/Epik Yelankha","Bangalore","MT/Epik","tl,fssai,se,clra,fire,ptec"],
+].map(r=>({id:r[0],name:r[1],city:r[2],brand:r[3],lics:r[4].split(",")}));
+
+const FI={Maharashtra:{tl:"Municipal",fssai:"₹2K-5K",se:"₹500-2.5K",clra:"₹1.5K-5K",ops:"₹1K-3K",fire:"₹5K-15K",ptec:"₹2.5K/yr",total:"₹35K-85K"},Karnataka:{tl:"₹5K-25K",fssai:"₹2K-5K",se:"₹500-2K",clra:"₹1.5K-5K",ops:"₹500-2K",fire:"₹5K-15K",ptec:"₹2.5K/yr",total:"₹40K-1.05L"},Delhi:{tl:"₹3K-10K",fssai:"₹2K-5K",se:"₹500-1.5K",clra:"₹1.5K-5K",ops:"₹1K-3K",fire:"₹5K-20K",ptec:"NA",total:"₹30K-85K"}};
+const GD="https://drive.google.com/drive/folders/1tjsyEf8OcmePcUWSHDhwH8SuSN3f0ybW?usp=drive_link";
+const US={"Bizops@2026":"Zippee@1234","admin":"admin123"};
+
+// ---------- LEDGER / BILLING defaults (from Charge Sheet) ----------
+const DEF_VENDORS=[
+  {k:"tcc",l:"TCC — The CheckList Co.",c:"#4F46E5"},
+  {k:"global",l:"Global Compliance",c:"#0891B2"},
+];
+// vendors that are NOT real billing vendors -> amount forced to 0, excluded from totals
+const EXCL_VENDORS=[
+  {k:"ground",l:"Ground Team (not billed)",c:"#9CA3AF"},
+  {k:"mixed",l:"TCC + Global (mixed — handle separately)",c:"#D97706"},
+  {k:"other",l:"Other / 3rd-party vendor",c:"#DC2626"},
+  {k:"na",l:"NA",c:"#D1D5DB"},
+];
+const LEDGER_STATUSES=["NA","Documents Collected","Application No. Received","Doc Submitted","Under Process","Pending (Post TL)","Received","Rejected"];
+const LEDGER_TYPES=[{k:"new",l:"New Registration"},{k:"renewal",l:"Renewal"},{k:"surrender",l:"Surrender"},{k:"amendment",l:"Amendment"}];
+// default rate table: rates[vendorKey][licenseKey] = {new,renewal,surrender,amendment}
+const DEF_RATES={
+  tcc:{tl:{new:25000,renewal:11000,surrender:4000,amendment:15000},fssai:{new:10000,renewal:4500,surrender:"",amendment:6000},
+    se:{new:5000,renewal:3500,surrender:3500,amendment:3500},clra:{new:20000,renewal:10000,surrender:6000,amendment:12000},
+    ops:{new:20000,renewal:10000,surrender:"",amendment:""},fire:{new:70000,renewal:50000,surrender:5000,amendment:50000},
+    ptec:{new:6000,renewal:3500,surrender:"",amendment:""}},
+  global:{tl:{new:50000,renewal:"",surrender:"",amendment:""},fssai:{new:25000,renewal:"",surrender:"",amendment:""},
+    se:{new:10000,renewal:"",surrender:"",amendment:""},clra:{new:15000,renewal:"",surrender:"",amendment:""},
+    ops:{new:"",renewal:"",surrender:"",amendment:""},fire:{new:"",renewal:"",surrender:"",amendment:""},
+    ptec:{new:10000,renewal:"",surrender:"",amendment:""}},
+};
+
+function mLD(){const d={};ST.forEach(s=>{d[s.id]={};s.lics.forEach(l=>{const w={};W.forEach(f=>{w[f.k]=f.t==="ck"?false:"";});d[s.id][l]=w;});});return d;}
+function pc(d){if(!d)return 0;let f=0;W.forEach(w=>{const v=d[w.k];if(w.t==="ck"){if(v)f++;}else if(v&&String(v).trim())f++;});return Math.round(f/W.length*100);}
+function gE(d){if(!d||!d.idt||!d.val||d.idt==="NA")return null;try{const x=new Date(d.idt);if(isNaN(x))return null;x.setMonth(x.getMonth()+Number(d.val));return x;}catch(e){return null;}}
+function dL(e){if(!e)return null;return Math.ceil((e-new Date())/864e5);}
+function fD(d){if(!d)return"—";try{return d.toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"2-digit"});}catch(e){return"—";}}
+function fmtINR(n){if(n===""||n===null||n===undefined||isNaN(n))return"₹0";return "₹"+Number(n).toLocaleString("en-IN");}
+
+// ---------- AI-assisted date extraction from an uploaded license document ----------
+function monthsBetween(isoA,isoB){
+  const d1=new Date(isoA),d2=new Date(isoB);
+  if(isNaN(d1)||isNaN(d2))return null;
+  let m=(d2.getFullYear()-d1.getFullYear())*12+(d2.getMonth()-d1.getMonth());
+  return m>0?m:null;
+}
+function fileToBase64(file){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=()=>res(r.result.split(",")[1]);
+    r.onerror=()=>rej(new Error("Could not read file"));
+    r.readAsDataURL(file);
+  });
+}
+async function extractDatesFromFile(file){
+  const isPdf=file.type==="application/pdf";
+  const isImage=file.type.startsWith("image/");
+  if(!isPdf&&!isImage)throw new Error("Upload an image (JPG/PNG) or a PDF");
+  const base64=await fileToBase64(file);
+  const contentBlock=isPdf
+    ?{type:"document",source:{type:"base64",media_type:"application/pdf",data:base64}}
+    :{type:"image",source:{type:"base64",media_type:file.type,data:base64}};
+  const resp=await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      model:"claude-sonnet-4-6",
+      max_tokens:1000,
+      messages:[{role:"user",content:[
+        contentBlock,
+        {type:"text",text:"This is a government business license / certificate document. Read it carefully and extract these fields. Reply with ONLY raw JSON, no markdown fences, no explanation, in exactly this shape: {\"issue_date\":\"YYYY-MM-DD or null\",\"applied_date\":\"YYYY-MM-DD or null\",\"expiry_date\":\"YYYY-MM-DD or null\",\"validity_months\":number or null,\"application_number\":\"string or null\"}. Convert any date you find (e.g. DD/MM/YYYY, DD-MM-YYYY, Month DD YYYY) into YYYY-MM-DD. If a field is not visible anywhere in the document, use null for it. Do not guess dates that are not present."}
+      ]}]
+    })
+  });
+  if(!resp.ok)throw new Error("API error "+resp.status);
+  const data=await resp.json();
+  const textBlocks=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
+  const clean=textBlocks.replace(/```json|```/g,"").trim();
+  const parsed=JSON.parse(clean);
+  if((parsed.validity_months===null||parsed.validity_months===undefined)&&parsed.issue_date&&parsed.expiry_date){
+    parsed.validity_months=monthsBetween(parsed.issue_date,parsed.expiry_date);
+  }
+  return parsed;
+}
+function DocExtract({onApply}){
+  const[file,setFile]=useState(null);
+  const[busy,setBusy]=useState(false);
+  const[err,setErr]=useState("");
+  const[result,setResult]=useState(null);
+  const inputRef=useRef(null);
+  const run=async()=>{
+    if(!file)return;
+    setBusy(true);setErr("");setResult(null);
+    try{ setResult(await extractDatesFromFile(file)); }
+    catch(e){ setErr("Couldn't read dates from this file — try a clearer photo/PDF, or enter dates manually. ("+e.message+")"); }
+    finally{ setBusy(false); }
+  };
+  const apply=()=>{
+    if(!result)return;
+    onApply(result);
+    setResult(null);setFile(null);
+    if(inputRef.current)inputRef.current.value="";
+  };
+  const any=result&&(result.issue_date||result.applied_date||result.expiry_date||result.validity_months||result.application_number);
+  return<div style={{background:"#F5F3FF",border:"1.5px solid #DDD6FE",borderRadius:12,padding:14,marginBottom:16}}>
+    <div style={{fontSize:12,fontWeight:800,color:"#7C3AED",marginBottom:8}}>📄 Auto-fill dates from license document</div>
+    <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+      <input ref={inputRef} type="file" accept="image/*,application/pdf" onChange={e=>{setFile(e.target.files[0]||null);setResult(null);setErr("");}} style={{fontSize:12,maxWidth:220}}/>
+      <button onClick={run} disabled={!file||busy} style={{...s.bt,padding:"7px 16px",opacity:(!file||busy)?.5:1,cursor:(!file||busy)?"not-allowed":"pointer"}}>{busy?"⏳ Reading document...":"🔍 Extract Dates"}</button>
+    </div>
+    {err&&<div style={{color:"#DC2626",fontSize:11,marginTop:8}}>{err}</div>}
+    {result&&<div style={{background:"#fff",borderRadius:10,padding:12,marginTop:10,fontSize:12}}>
+      {!any?<div style={{color:"#9CA3AF"}}>No dates could be found in this document. Try a clearer scan, or enter them manually below.</div>:<>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:8,marginBottom:10}}>
+        <div>Applied<br/><strong>{result.applied_date||"—"}</strong></div>
+        <div>Issued<br/><strong>{result.issue_date||"—"}</strong></div>
+        <div>Expiry<br/><strong>{result.expiry_date||"—"}</strong></div>
+        <div>Validity<br/><strong>{result.validity_months?result.validity_months+"m":"—"}</strong></div>
+        <div>App. No.<br/><strong>{result.application_number||"—"}</strong></div>
+      </div>
+      <button onClick={apply} style={s.gbt}>✓ Apply to this license</button>
+      <span style={{marginLeft:8,color:"#9CA3AF",fontSize:11}}>Please double-check before applying — auto-reading can miss or misread fields.</span>
+      </>}
+    </div>}
+  </div>;
+}
+
+function computeVerticalMerges(rows,headers,mergeCols){
+  const merges=[];
+  (mergeCols||[]).forEach(colName=>{
+    const c=headers.indexOf(colName);
+    if(c<0)return;
+    let blockStart=0;
+    for(let i=1;i<=rows.length;i++){
+      const sameAsBlock=i<rows.length&&rows[i][colName]===rows[blockStart][colName]&&rows[blockStart][colName]!==undefined&&rows[blockStart][colName]!==null&&rows[blockStart][colName]!=="";
+      if(!sameAsBlock){
+        if(i-1>blockStart){ merges.push({s:{r:blockStart+1,c},e:{r:(i-1)+1,c}}); }
+        blockStart=i;
+      }
+    }
+  });
+  return merges;
+}
+function styledSheetFromRows(rows,headerColor,mergeCols){
+  if(!rows||!rows.length)return null;
+  const headers=Object.keys(rows[0]);
+  const aoa=[headers,...rows.map(r=>headers.map(h=>{const v=r[h];return v===undefined||v===null?"":v;}))];
+  const ws=XLSX.utils.aoa_to_sheet(aoa);
+  const thin={style:"thin",color:{rgb:"D1D5DB"}};
+  const border={top:thin,bottom:thin,left:thin,right:thin};
+  const range=XLSX.utils.decode_range(ws['!ref']);
+  for(let R=range.s.r;R<=range.e.r;R++){
+    for(let C=range.s.c;C<=range.e.c;C++){
+      const addr=XLSX.utils.encode_cell({r:R,c:C});
+      if(!ws[addr])ws[addr]={t:"s",v:""};
+      if(R===0){
+        ws[addr].s={font:{bold:true,color:{rgb:"FFFFFF"},sz:11},fill:{fgColor:{rgb:(headerColor||"4F46E5").replace("#","")}},border,alignment:{horizontal:"center",vertical:"center",wrapText:true}};
+      }else{
+        ws[addr].s={border,alignment:{vertical:"center"},font:{sz:10.5},fill:{fgColor:{rgb:R%2===0?"F3F4F6":"FFFFFF"}}};
+      }
+    }
+  }
+  if(mergeCols&&mergeCols.length){
+    const merges=computeVerticalMerges(rows,headers,mergeCols);
+    if(merges.length){
+      ws['!merges']=(ws['!merges']||[]).concat(merges);
+      // blank out the value of every cell after the first row of each merged block (keeps borders/fill, avoids repeated text under the merge)
+      merges.forEach(m=>{
+        for(let R=m.s.r+1;R<=m.e.r;R++){
+          const addr=XLSX.utils.encode_cell({r:R,c:m.s.c});
+          if(ws[addr]){ws[addr].v="";ws[addr].t="s";}
+        }
+      });
+    }
+  }
+  ws['!cols']=headers.map(h=>{const maxLen=Math.max(String(h).length,...rows.map(r=>String(r[h]??"").length));return{wch:Math.min(Math.max(maxLen+3,10),42)};});
+  ws['!rows']=[{hpt:24}];
+  return ws;
+}
+function downloadXLSXMulti(sheetsArr,filename){
+  try{
+    const nonEmpty=(sheetsArr||[]).filter(sh=>sh.rows&&sh.rows.length);
+    if(!nonEmpty.length){alert("Nothing to export.");return;}
+    const wb=XLSX.utils.book_new();
+    nonEmpty.forEach(sh=>{
+      const ws=styledSheetFromRows(sh.rows,sh.headerColor,sh.mergeCols);
+      XLSX.utils.book_append_sheet(wb,ws,(sh.name||"Sheet").slice(0,31));
+    });
+    XLSX.writeFile(wb,filename);
+  }catch(e){ console.error("export failed",e); alert("Export failed: "+e.message); }
+}
+function downloadXLSX(rows,filename,sheetName,headerColor,mergeCols){
+  try{
+    if(!rows||!rows.length){alert("Nothing to export.");return;}
+    const ws=styledSheetFromRows(rows,headerColor,mergeCols);
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,(sheetName||"Sheet1").slice(0,31));
+    XLSX.writeFile(wb,filename);
+  }catch(e){ console.error("export failed",e); alert("Export failed: "+e.message); }
+}
+
+const s={i:{background:"#fff",border:"1.5px solid #E2E8F0",color:"#1a1a2e",padding:"9px 14px",borderRadius:10,fontSize:13,width:"100%",boxSizing:"border-box",outline:"none"},
+  c:{border:"1.5px solid #E5E7EB",borderRadius:6,padding:"5px 8px",fontSize:12,color:"#1a1a2e",background:"#FAFBFC",outline:"none"},
+  cd:{background:"#fff",borderRadius:16,border:"1px solid #E5E7EB",padding:22,boxShadow:"0 1px 4px rgba(0,0,0,.04)"},
+  th:{padding:"10px 10px",textAlign:"left",fontWeight:700,color:"#6B7280",fontSize:10,textTransform:"uppercase",letterSpacing:".6px",background:"#F9FAFB",borderBottom:"2px solid #E5E7EB",position:"sticky",top:0,zIndex:2,whiteSpace:"nowrap"},
+  td:{padding:"8px 10px",borderBottom:"1px solid #F3F4F6",fontSize:13},
+  bt:{background:"linear-gradient(135deg,#4F46E5,#6366F1)",color:"#fff",border:"none",padding:"10px 22px",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,boxShadow:"0 2px 8px rgba(79,70,229,.2)"},
+  gbt:{background:"linear-gradient(135deg,#16A34A,#22C55E)",color:"#fff",border:"none",padding:"9px 18px",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13},
+};
+
+function Bar({v,c,h}){return<div style={{height:h||7,background:"#E5E7EB",borderRadius:h||7,overflow:"hidden",width:"100%"}}><div style={{height:"100%",width:Math.min(v,100)+"%",background:c||(v===100?"#16A34A":v>=50?"#EAB308":"#EF4444"),borderRadius:h||7,transition:"width .4s"}}/></div>;}
+function DT({d}){if(d===null)return<span style={{color:"#D1D5DB",fontSize:11}}>—</span>;const x=d<0?{bg:"#FEE2E2",c:"#DC2626",t:"EXPIRED"}:d<30?{bg:"#FEE2E2",c:"#DC2626",t:d+"d ⚠️"}:d<90?{bg:"#FEF3C7",c:"#D97706",t:d+"d"}:{bg:"#DCFCE7",c:"#16A34A",t:d+"d ✓"};return<span style={{background:x.bg,color:x.c,padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{x.t}</span>;}
+function Bg({t,bg,c}){return<span style={{background:bg||"#EEF2FF",color:c||"#4F46E5",padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{t}</span>;}
+
+function PwInput({value,onChange,placeholder,style,onKeyDown}){
+  const[show,setShow]=useState(false);
+  return<div style={{position:"relative"}}>
+    <input type={show?"text":"password"} value={value} onChange={onChange} placeholder={placeholder} onKeyDown={onKeyDown} style={{...style,paddingRight:38}}/>
+    <button type="button" onClick={()=>setShow(v=>!v)} title={show?"Hide password":"Show password"} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",padding:2,fontSize:15,color:"#9CA3AF",lineHeight:1}}>{show?"🙈":"👁️"}</button>
+  </div>;
+}
+
+function NV({pg,go,n,u,lo}){
+  return<div style={{background:"#fff",borderBottom:"1px solid #E5E7EB",padding:"0 24px",display:"flex",alignItems:"center",height:58,gap:2,position:"sticky",top:0,zIndex:50,boxShadow:"0 1px 6px rgba(0,0,0,.04)",overflowX:"auto"}}>
+    <div style={{width:36,height:36,borderRadius:10,background:"linear-gradient(135deg,#4F46E5,#7C3AED)",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:900,fontSize:15,marginRight:10,flexShrink:0}}>Z</div>
+    <span style={{fontWeight:800,fontSize:17,color:"#1a1a2e",marginRight:20,whiteSpace:"nowrap"}}>License Tracker</span>
+    {[{k:"home",l:"📊 Dashboard"},{k:"expiry",l:"📅 Expiry"},{k:"history",l:"📜 History"},{k:"ledger",l:"💰 Ledger"},{k:"tasks",l:"✅ Tasks"},{k:"fees",l:"📖 Fee Ref"},{k:"master",l:"🏪 Master"},{k:"docs",l:"📁 Docs"},{k:"add",l:"➕ Add"}].map(t=>
+      <button key={t.k} onClick={()=>go(t.k)} style={{background:pg===t.k?"linear-gradient(135deg,#4F46E5,#6366F1)":"transparent",color:pg===t.k?"#fff":"#6B7280",border:"none",padding:"8px 14px",borderRadius:10,fontWeight:600,fontSize:12,whiteSpace:"nowrap",boxShadow:pg===t.k?"0 2px 8px rgba(79,70,229,.2)":"none"}}>{t.l}</button>)}
+    <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
+      <Bg t={n+" stores"} bg="#F3F4F6" c="#6B7280"/>
+      {u&&<Bg t={"👤 "+u} bg="#EEF2FF" c="#4F46E5"/>}
+      {lo&&<button onClick={lo} style={{background:"#FEE2E2",color:"#DC2626",border:"none",padding:"5px 12px",borderRadius:20,fontSize:11,fontWeight:700}}>Logout</button>}
+    </div>
+  </div>;
+}
+
+function App(){
+  const[li,setLi]=useState(false);const[lI,setLI]=useState("");const[lP,setLP]=useState("");const[lE,setLE]=useState("");const[lU,setLU]=useState("");
+  const doL=()=>{if(US[lI]&&US[lI]===lP){setLi(true);setLU(lI);setLE("");}else setLE("Invalid credentials");};
+  if(!li)return<div style={{background:"linear-gradient(135deg,#0F172A,#1E293B)",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+    <div style={{width:"100%",maxWidth:420,textAlign:"center"}} className="fi">
+      <div style={{width:72,height:72,borderRadius:18,background:"linear-gradient(135deg,#4F46E5,#7C3AED)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 20px",boxShadow:"0 8px 30px rgba(79,70,229,.4)"}}><span style={{fontSize:34,color:"#fff",fontWeight:900}}>Z</span></div>
+      <h1 style={{color:"#fff",fontSize:28,fontWeight:900,marginBottom:4}}>License Tracker</h1>
+      <p style={{color:"#94A3B8",fontSize:14,marginBottom:32}}>Zippee BizOps — Compliance Management</p>
+      {!SB_READY&&<div style={{background:"#7C2D12",color:"#FDBA74",fontSize:12,fontWeight:600,padding:"10px 16px",borderRadius:10,marginBottom:20,textAlign:"left"}}>⚠️ Supabase isn't configured — data won't be saved. Paste your Project URL &amp; anon key into the <code>SUPABASE_URL</code> / <code>SUPABASE_ANON_KEY</code> constants near the top of this file's script.</div>}
+      <div style={{background:"#fff",borderRadius:20,padding:"36px 32px",boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
+        <h2 style={{fontSize:20,fontWeight:800,marginBottom:24}}>Sign In</h2>
+        <input value={lI} onChange={e=>setLI(e.target.value)} placeholder="User ID" style={{...s.i,marginBottom:12}}/>
+        <div style={{marginBottom:16}}><PwInput value={lP} onChange={e=>setLP(e.target.value)} placeholder="Password" style={s.i} onKeyDown={e=>e.key==="Enter"&&doL()}/></div>
+        {lE&&<div style={{color:"#DC2626",fontSize:12,marginBottom:12,fontWeight:600}}>⚠️ {lE}</div>}
+        <button onClick={doL} style={{...s.bt,width:"100%",padding:13,fontSize:15}}>Sign In →</button>
+      </div>
+    </div>
+  </div>;
+  return<M u={lU} lo={()=>{setLi(false);setLI("");setLP("");setLU("");}}/>;
+}
+
+function M({u,lo}){
+  const[ready,setReady]=useState(false);
+  const[customL,setCustomL]=useState([]);
+  const[customV,setCustomV]=useState([]);
+  const[st,setSt]=useState(ST);
+  const[ld,setLd]=useState(mLD());
+  const[fe,setFe]=useState(FI);
+  const[cf,setCf]=useState({});
+  const[hi,setHi]=useState({});
+  const[rates,setRates]=useState(DEF_RATES);
+  const[lg,setLg]=useState({}); // ledger entries: `${storeId}_${licKey}` -> {vendor,type,status,amount,paidAmount,notes}
+  const[sheets,setSheets]=useState([]); // task tracker sheets: [{id,name,brand,rows:[{id,storeName,city,licenses:[{id,name,applyDate,status,link,completed}]}]}]
+
+  // ---- load once on mount ----
+  useEffect(()=>{
+    (async()=>{
+      const d=await loadAll();
+      if(d){
+        if(d.customL)setCustomL(d.customL);
+        if(d.customV)setCustomV(d.customV);
+        if(d.st)setSt(d.st.map(x=>({...x,lics:[...new Set(x.lics)]})));
+        if(d.ld)setLd(d.ld);
+        if(d.fe)setFe(d.fe);
+        if(d.cf)setCf(d.cf);
+        if(d.hi)setHi(d.hi);
+        if(d.rates)setRates(d.rates);
+        if(d.lg)setLg(d.lg);
+        if(d.sheets)setSheets(d.sheets);
+      }
+      setReady(true);
+    })();
+  },[]);
+
+  // ---- debounced save whenever anything changes (after initial load) ----
+  const saveTimer=useRef(null);
+  useEffect(()=>{
+    if(!ready)return;
+    if(saveTimer.current)clearTimeout(saveTimer.current);
+    saveTimer.current=setTimeout(()=>{
+      saveAll({customL,customV,st,ld,fe,cf,hi,rates,lg,sheets});
+    },600);
+    return ()=>{if(saveTimer.current)clearTimeout(saveTimer.current);};
+  },[ready,customL,customV,st,ld,fe,cf,hi,rates,lg,sheets]);
+
+  const L=useMemo(()=>[...DEF_L,...customL],[customL]);
+  const VENDORS=useMemo(()=>[...DEF_VENDORS,...customV],[customV]);
+  const ALLV=useMemo(()=>[...VENDORS,...EXCL_VENDORS],[VENDORS]);
+
+  const[addLicModal,setAddLicModal]=useState(false);
+  const[newLicName,setNewLicName]=useState("");
+  const addNewLicense=()=>{
+    if(!newLicName.trim())return;
+    const key="custom_"+Date.now();
+    const idx=customL.length;
+    const col=EXTRA_COLORS[idx%EXTRA_COLORS.length];
+    const ico=EXTRA_ICONS[idx%EXTRA_ICONS.length];
+    const newL={k:key,l:newLicName.trim(),i:ico,bg:"linear-gradient(135deg,"+col+"15,"+col+"25)",f:col+"15",b:col+"33",c:col};
+    setCustomL(p=>[...p,newL]);
+    setNewLicName("");
+    setAddLicModal(false);
+  };
+
+  const[pg,setPg]=useState("home");
+  const[sid,setSid]=useState(null);const[lk,setLk]=useState(null);
+  const[q,setQ]=useState("");const[fB,setFB]=useState("All");const[fC,setFC]=useState("All");const[dr,setDr]=useState(false);
+  const[nS,setNS]=useState({name:"",city:"",brand:"",lics:[]});const[nF,setNF]=useState("");
+  const[eQ,setEQ]=useState("");const[eB,setEB]=useState("All");const[eC,setEC]=useState("All");const[eK,setEK]=useState("all");
+  const[hQ,setHQ]=useState("");const[hB,setHB]=useState("All");const[hL,setHL]=useState("All");const[hTab,setHTab]=useState("renewals");
+  const[au,setAu]=useState(false);const[aI,setAI]=useState("");const[aP,setAP]=useState("");const[aE,setAE]=useState("");
+  const[rm,setRm]=useState(null);const[rf,setRf]=useState({ao:"",idt:"",val:""});
+
+  const ci=useMemo(()=>[...new Set(st.map(x=>x.city))].sort(),[st]);
+  const br=useMemo(()=>[...new Set(st.map(x=>x.brand))].sort(),[st]);
+  const store=sid?st.find(x=>x.id===sid):null;
+  const fl=useMemo(()=>st.filter(x=>{if(fB!=="All"&&x.brand!==fB)return false;if(fC!=="All"&&x.city!==fC)return false;if(q&&!sid)return(x.name+x.city+x.brand).toLowerCase().includes(q.toLowerCase());return true;}),[st,fB,fC,q,sid]);
+  const sg=useMemo(()=>{if(!q)return st.slice(0,12);return st.filter(x=>(x.name+x.city+x.brand).toLowerCase().includes(q.toLowerCase())).slice(0,12);},[st,q]);
+
+  const up=(i,l,k,v)=>setLd(p=>({...p,[i]:{...p[i],[l]:{...p[i]?.[l],[k]:v}}}));
+  const uS=(i,k,v)=>setSt(p=>p.map(x=>x.id===i?{...x,[k]:v}:x));
+  const go=p=>{setPg(p);setSid(null);setLk(null);};
+  // attach a license to a store on demand (e.g. from the Ledger's "New Bill" flow) if it isn't already assigned
+  const ensureStoreHasLicense=(storeId,lk)=>{
+    setSt(p=>p.map(x=>{
+      if(x.id!==storeId||x.lics.includes(lk))return x;
+      return{...x,lics:[...new Set([...x.lics,lk])]};
+    }));
+    if(!ld[storeId]?.[lk]){
+      const w={};W.forEach(f=>{w[f.k]=f.t==="ck"?false:"";});
+      setLd(p=>({...p,[storeId]:{...p[storeId],[lk]:w}}));
+    }
+  };
+  const iC=(i,l)=>cf[i+"_"+l]===true;
+  const tC=(i,l)=>setCf(p=>({...p,[i+"_"+l]:!p[i+"_"+l]}));
+
+  const doRen=()=>{
+    if(!rm||!rf.idt||!rf.val)return;
+    const d=ld[rm.sid]?.[rm.lk]||{};const ex=gE(d);
+    if(d.ao||d.idt||d.val){
+      const o={ao:d.ao||"",idt:d.idt||"",val:d.val||"",expiry:ex?ex.toLocaleDateString("en-IN"):"—",renewedOn:new Date().toLocaleDateString("en-IN"),sn:st.find(x=>x.id===rm.sid)?.name||"",ll:L.find(x=>x.k===rm.lk)?.l||""};
+      const hk=rm.sid+"_"+rm.lk;
+      setHi(p=>({...p,[hk]:[...(p[hk]||[]),o]}));
+    }
+    up(rm.sid,rm.lk,"ao",rf.ao);up(rm.sid,rm.lk,"idt",rf.idt);up(rm.sid,rm.lk,"val",rf.val);
+    setCf(p=>({...p,[rm.sid+"_"+rm.lk]:false}));
+    setRm(null);setRf({ao:"",idt:"",val:""});
+  };
+
+  const allH=useMemo(()=>{const r=[];Object.entries(hi).forEach(([k,recs])=>{const[i,l]=k.split("_");const x=st.find(z=>z.id===i);const lc=L.find(z=>z.k===l);recs.forEach((rc,idx)=>{r.push({...rc,sid:i,sn:x?.name||rc.sn||i,cy:x?.city||"",bd:x?.brand||"",lk:l,ll:lc?.l||rc.ll||l,lc:lc?.c||"#6B7280",li:lc?.i||"📋",cn:idx+1});});});return r;},[hi,st]);
+
+  // ---- flatten every ledger entry's logged payments into one project-wide payment history ----
+  const allPayHistory=useMemo(()=>{
+    const r=[];
+    Object.entries(lg).forEach(([key,entry])=>{
+      const us=key.indexOf("_");
+      const i=key.slice(0,us),l=key.slice(us+1);
+      const x=st.find(z=>z.id===i);
+      const lic=L.find(z=>z.k===l);
+      const vendor=ALLV.find(v=>v.k===entry.vendor);
+      (entry.payments||[]).forEach((p,idx2)=>{
+        r.push({
+          sid:i,sn:x?x.name:i,cy:x?x.city:"",bd:x?x.brand:"",
+          lk:l,ll:lic?lic.l:l,lc:lic?lic.c:"#6B7280",li:lic?lic.i:"📋",
+          vendorL:vendor?vendor.l:"— Unassigned —",amount:Number(p.amount)||0,date:p.date||"—",note:p.note||"",
+          invoiceNo:entry.invoiceNo||"",n:idx2+1
+        });
+      });
+    });
+    return r.sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  },[lg,st,L,ALLV]);
+
+  const eS=useMemo(()=>{let t=0,e=0,c=0,w=0,sf=0,n=0;st.forEach(x=>x.lics.forEach(l=>{t++;const d=ld[x.id]?.[l];const ex=gE(d);const dy=dL(ex);if(dy===null)n++;else if(dy<0)e++;else if(dy<30)c++;else if(dy<90)w++;else sf++;}));return{t,e,c,w,sf,n};},[st,ld]);
+
+  // ---- ledger helpers ----
+  const lgKey=(i,l)=>i+"_"+l;
+  const getLg=(i,l)=>lg[lgKey(i,l)]||{vendor:"",type:"new",status:"NA",appliedDate:"",amount:"",invoiceNo:"",billLink:"",paidAmount:"",paidDate:"",notes:"",payments:[]};
+  const setLgField=(i,l,k,v)=>setLg(p=>({...p,[lgKey(i,l)]:{...getLg(i,l),[k]:v}}));
+  // every payment is appended to a history log (not just overwritten) so there's a full paid-when/paid-how-much trail
+  const addPayment=(i,l,amount,date,note)=>{
+    const amt=Number(amount)||0;
+    if(amt<=0)return;
+    setLg(p=>{
+      const cur=getLg(i,l);
+      let basePayments=cur.payments||[];
+      if(basePayments.length===0&&Number(cur.paidAmount)>0){
+        basePayments=[{amount:Number(cur.paidAmount),date:cur.paidDate||"—",note:"Earlier recorded payment"}];
+      }
+      const payments=[...basePayments,{amount:amt,date:date||new Date().toISOString().slice(0,10),note:note||""}];
+      const paidAmount=payments.reduce((a,pp)=>a+(Number(pp.amount)||0),0);
+      return{...p,[lgKey(i,l)]:{...cur,payments,paidAmount,paidDate:date||cur.paidDate}};
+    });
+  };
+  const removePayment=(i,l,idx)=>{
+    setLg(p=>{
+      const cur=getLg(i,l);
+      const payments=(cur.payments||[]).filter((_,ix)=>ix!==idx);
+      const paidAmount=payments.reduce((a,pp)=>a+(Number(pp.amount)||0),0);
+      return{...p,[lgKey(i,l)]:{...cur,payments,paidAmount}};
+    });
+  };
+  const rateFor=(vendorKey,licKey,typeKey)=>{
+    const r=rates[vendorKey]?.[licKey];
+    if(!r)return"";
+    return r[typeKey]!==undefined?r[typeKey]:"";
+  };
+  const computedAmount=(entry,licKey)=>{
+    if(entry.amount!==""&&entry.amount!==undefined&&entry.amount!==null)return Number(entry.amount)||0;
+    if(!entry.vendor||EXCL_VENDORS.some(v=>v.k===entry.vendor))return 0;
+    const r=rateFor(entry.vendor,licKey,entry.type||"new");
+    return r===""?0:Number(r)||0;
+  };
+  const isExcludedVendor=(vk)=>EXCL_VENDORS.some(v=>v.k===vk);
+
+  if(!ready){
+    return<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:14,background:"#F0F2F5"}}>
+      <div className="sp" style={{width:36,height:36,border:"4px solid #E0E7FF",borderTopColor:"#4F46E5",borderRadius:"50%"}}/>
+      <div style={{color:"#6B7280",fontSize:13,fontWeight:600}}>Loading license data…</div>
+    </div>;
+  }
+
+  // ============ LEDGER PAGE ============
+  if(pg==="ledger"){
+    return<LedgerPage st={st} L={L} VENDORS={VENDORS} ALLV={ALLV} rates={rates} setRates={setRates}
+      lg={lg} getLg={getLg} setLgField={setLgField} computedAmount={computedAmount} isExcludedVendor={isExcludedVendor}
+      addPayment={addPayment} removePayment={removePayment} ensureStoreHasLicense={ensureStoreHasLicense}
+      customL={customL} setCustomL={setCustomL}
+      customV={customV} setCustomV={setCustomV} ci={ci} br={br} go={go} pg={pg} u={u} lo={lo}/>;
+  }
+
+  // ============ TASK SHEETS PAGE ============
+  if(pg==="tasks"){
+    return<SheetsPage sheets={sheets} setSheets={setSheets} st={st} L={L} go={go} pg={pg} u={u} lo={lo}/>;
+  }
+
+  // EXPIRY
+  if(pg==="expiry"){
+    const e0=st.filter(x=>{if(eB!=="All"&&x.brand!==eB)return false;if(eC!=="All"&&x.city!==eC)return false;if(eQ)return x.name.toLowerCase().includes(eQ.toLowerCase());return true;});
+    let ka=0,ke=0,kc=0,kw=0,ks=0,kn=0;const sm={};
+    e0.forEach(x=>{const f=new Set();x.lics.forEach(l=>{ka++;const d=ld[x.id]?.[l];const ex=gE(d);const dy=dL(ex);if(dy===null){kn++;f.add("nd");}else if(dy<0){ke++;f.add("ex");}else if(dy<30){kc++;f.add("cr");}else if(dy<90){kw++;f.add("wa");}else{ks++;f.add("sf");}});sm[x.id]=f;});
+    const ef=eK==="all"?e0:e0.filter(x=>sm[x.id]?.has(eK));
+    const kp=[{k:"all",l:"All",n:ka,c:"#4F46E5",b:"#EEF2FF"},{k:"ex",l:"Expired",n:ke,c:"#DC2626",b:"#FEE2E2"},{k:"cr",l:"<30d",n:kc,c:"#EA580C",b:"#FFEDD5"},{k:"wa",l:"30-90d",n:kw,c:"#D97706",b:"#FEF3C7"},{k:"sf",l:"90d+",n:ks,c:"#16A34A",b:"#DCFCE7"},{k:"nd",l:"No Data",n:kn,c:"#9CA3AF",b:"#F3F4F6"}];
+    return<div style={{background:"#F0F2F5",minHeight:"100vh"}}><NV pg={pg} go={go} n={st.length} u={u} lo={lo}/>
+    <div style={{padding:"20px 24px"}} className="fi">
+      <h2 style={{fontSize:22,fontWeight:800,marginBottom:4}}>📅 Expiry Tracker</h2>
+      <p style={{color:"#6B7280",fontSize:13,marginBottom:16}}>Issue Date + Validity → Expiry auto-calculates. Click KPIs to filter.</p>
+      <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>{kp.map(k=><div key={k.k} onClick={()=>setEK(k.k)} style={{...s.cd,padding:"12px 20px",textAlign:"center",minWidth:85,background:eK===k.k?k.c:k.b,border:"2px solid "+(eK===k.k?k.c:k.c+"22"),borderRadius:14,cursor:"pointer"}}><div style={{fontSize:22,fontWeight:900,color:eK===k.k?"#fff":k.c}}>{k.n}</div><div style={{fontSize:11,color:eK===k.k?"rgba(255,255,255,.8)":"#6B7280",fontWeight:600}}>{k.l}</div></div>)}</div>
+      {eK!=="all"&&<div style={{marginBottom:10,display:"flex",alignItems:"center",gap:8}}><button onClick={()=>setEK("all")} style={{background:"#F3F4F6",border:"none",padding:"4px 12px",borderRadius:8,fontSize:11,fontWeight:600,color:"#6B7280"}}>✕ Clear</button><span style={{fontSize:11,color:"#9CA3AF"}}>{ef.length} stores</span></div>}
+      <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}><input value={eQ} onChange={e=>setEQ(e.target.value)} placeholder="🔍 Search..." style={{...s.i,maxWidth:240}}/><select value={eC} onChange={e=>setEC(e.target.value)} style={{...s.i,width:"auto",minWidth:120}}><option value="All">All Cities</option>{ci.map(c=><option key={c}>{c}</option>)}</select><select value={eB} onChange={e=>setEB(e.target.value)} style={{...s.i,width:"auto",minWidth:120}}><option value="All">All Brands</option>{br.map(b=><option key={b}>{b}</option>)}</select></div>
+      <div style={{...s.cd,padding:0,overflow:"auto",maxHeight:"62vh",borderRadius:14}}>
+        <table style={{borderCollapse:"collapse",minWidth:1900}}>
+          <thead><tr>
+            <th style={{...s.th,position:"sticky",left:0,zIndex:5,background:"#4338CA",color:"#fff",minWidth:200}} rowSpan={2}>Store</th>
+            <th style={{...s.th,background:"#4338CA",color:"#fff"}} rowSpan={2}>City</th>
+            <th style={{...s.th,background:"#4338CA",color:"#fff"}} rowSpan={2}>Brand</th>
+            {L.map(l=><th key={l.k} colSpan={6} style={{...s.th,background:l.c,color:"#fff",textAlign:"center",borderLeft:"3px solid rgba(255,255,255,.2)",fontSize:11}}>{l.i} {l.l}</th>)}
+            <th style={{...s.th,background:"#4338CA",color:"#fff"}} rowSpan={2}>Remarks</th>
+          </tr><tr>{L.map(l=>["Applied","Issued","Valid.","Expiry","Days","Renew"].map((h,i)=><th key={l.k+h} style={{...s.th,background:l.f,color:l.c,textAlign:"center",fontSize:9,borderLeft:i===0?"3px solid "+l.b:"none",fontWeight:700,padding:"6px 4px"}}>{h}</th>))}</tr></thead>
+          <tbody>{ef.map((x,ri)=>{const bg=ri%2===0?"#fff":"#FAFBFC";return<tr key={x.id} className="hr">
+            <td style={{...s.td,fontWeight:700,position:"sticky",left:0,background:bg,zIndex:1,whiteSpace:"nowrap",fontSize:12}}>{x.name}</td>
+            <td style={{...s.td,color:"#6B7280",background:bg,fontSize:12}}>{x.city}</td>
+            <td style={{...s.td,background:bg}}><Bg t={x.brand}/></td>
+            {L.map(l=>{
+              if(!ld[x.id])ld[x.id]={};if(!ld[x.id][l.k]){const w={};W.forEach(f=>{w[f.k]=f.t==="ck"?false:"";});ld[x.id][l.k]=w;}
+              const d=ld[x.id][l.k];const na=d.idt==="NA";const ex=na?null:gE(d);const dy=na?null:dL(ex);
+              const cb=x.lics.includes(l.k)?bg:(bg==="#fff"?"#F9FAFB":"#F5F5F7");
+              return<Fragment key={l.k}>
+                <td style={{...s.td,background:cb,borderLeft:"3px solid "+l.b}}>{d.ao==="NA"?<span style={{color:"#D1D5DB",fontSize:11,cursor:"pointer",display:"block",textAlign:"center"}} onClick={()=>up(x.id,l.k,"ao","")}>NA</span>:<div style={{display:"flex",gap:2}}><input type="date" value={d.ao||""} onChange={e=>up(x.id,l.k,"ao",e.target.value)} style={{...s.c,width:100}}/><button onClick={()=>up(x.id,l.k,"ao","NA")} style={{background:"none",border:"none",color:"#D1D5DB",fontSize:9,padding:"0 2px"}} title="NA">na</button></div>}</td>
+                <td style={{...s.td,background:cb}}>{d.idt==="NA"?<span style={{color:"#D1D5DB",fontSize:11,cursor:"pointer",display:"block",textAlign:"center"}} onClick={()=>up(x.id,l.k,"idt","")}>NA</span>:<div style={{display:"flex",gap:2}}><input type="date" value={d.idt||""} onChange={e=>up(x.id,l.k,"idt",e.target.value)} style={{...s.c,width:100}}/><button onClick={()=>up(x.id,l.k,"idt","NA")} style={{background:"none",border:"none",color:"#D1D5DB",fontSize:9,padding:"0 2px"}} title="NA">na</button></div>}</td>
+                <td style={{...s.td,background:cb}}><input type="number" value={d.val||""} onChange={e=>up(x.id,l.k,"val",e.target.value)} style={{...s.c,width:48,textAlign:"center"}} placeholder="mo"/></td>
+                <td style={{...s.td,background:cb,fontSize:11,fontWeight:700,color:dy!==null&&dy<30?"#DC2626":"#374151"}}>{na?"NA":fD(ex)}</td>
+                <td style={{...s.td,background:cb,textAlign:"center"}}>{na?<span style={{color:"#D1D5DB",fontSize:10}}>NA</span>:<DT d={dy}/>}</td>
+                <td style={{...s.td,background:cb,textAlign:"center"}}><button onClick={()=>{setRf({ao:"",idt:"",val:""});setRm({sid:x.id,lk:l.k});}} style={{background:"linear-gradient(135deg,#7C3AED,#8B5CF6)",color:"#fff",border:"none",borderRadius:8,padding:"4px 8px",fontSize:9,fontWeight:700,whiteSpace:"nowrap"}}>🔄 Renew</button>{(hi[x.id+"_"+l.k]||[]).length>0&&<div style={{fontSize:8,color:"#7C3AED",fontWeight:700,marginTop:1}}>{hi[x.id+"_"+l.k].length} past</div>}</td>
+              </Fragment>;
+            })}
+            <td style={{...s.td,background:bg}}><input value={ld[x.id]?.[x.lics[0]]?.rem||""} onChange={e=>{if(x.lics[0])up(x.id,x.lics[0],"rem",e.target.value);}} style={{...s.c,width:110}} placeholder="..."/></td>
+          </tr>})}</tbody>
+        </table>
+      </div>
+      {/* Renewal Modal */}
+      {rm&&(()=>{const d=ld[rm.sid]?.[rm.lk]||{};const ex=gE(d);const lc=L.find(x=>x.k===rm.lk);const sx=st.find(x=>x.id===rm.sid);
+        let ne=null;if(rf.idt&&rf.val){try{const x=new Date(rf.idt);if(!isNaN(x)){x.setMonth(x.getMonth()+Number(rf.val));ne=x;}}catch(e){}}
+        return<div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}} onClick={()=>{setRm(null);setRf({ao:"",idt:"",val:""});}}>
+          <div style={{background:"#fff",borderRadius:20,padding:32,maxWidth:540,width:"100%",maxHeight:"85vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.2)"}} onClick={e=>e.stopPropagation()} className="fi">
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}><div style={{width:48,height:48,borderRadius:14,background:lc.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>{lc.i}</div><div><h3 style={{fontSize:20,fontWeight:800,color:lc.c}}>Renew {lc.l}</h3><p style={{fontSize:13,color:"#6B7280"}}>{sx?.name}</p></div><button onClick={()=>{setRm(null);setRf({ao:"",idt:"",val:""});}} style={{marginLeft:"auto",background:"#F3F4F6",border:"none",width:36,height:36,borderRadius:10,fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",color:"#6B7280"}}>×</button></div>
+            {(d.ao||d.idt)&&<div style={{background:"#FEF2F2",borderRadius:12,padding:14,marginBottom:16,border:"1.5px solid #FECACA"}}><h4 style={{fontSize:12,fontWeight:700,color:"#DC2626",marginBottom:8}}>Current Data → History</h4><div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:6,fontSize:11}}><div style={{background:"#fff",padding:"6px 10px",borderRadius:6}}>Applied<br/><strong>{d.ao||"—"}</strong></div><div style={{background:"#fff",padding:"6px 10px",borderRadius:6}}>Issued<br/><strong>{d.idt||"—"}</strong></div><div style={{background:"#fff",padding:"6px 10px",borderRadius:6}}>Validity<br/><strong>{d.val?d.val+"m":"—"}</strong></div><div style={{background:"#fff",padding:"6px 10px",borderRadius:6}}>Expiry<br/><strong>{ex?ex.toLocaleDateString("en-IN"):"—"}</strong></div></div></div>}
+            <div style={{background:"linear-gradient(135deg,#F0FDF4,#DCFCE7)",borderRadius:14,padding:20,marginBottom:16,border:"1.5px solid #BBF7D0"}}><h4 style={{fontSize:14,fontWeight:800,color:"#16A34A",marginBottom:14}}>🔄 New Renewal Details</h4><div style={{display:"grid",gap:12}}><div><label style={{fontSize:12,fontWeight:700,color:"#374151",display:"block",marginBottom:4}}>Applied Date</label><input type="date" value={rf.ao} onChange={e=>setRf(p=>({...p,ao:e.target.value}))} style={{...s.i,background:"#fff"}}/></div><div><label style={{fontSize:12,fontWeight:700,color:"#374151",display:"block",marginBottom:4}}>Issue Date *</label><input type="date" value={rf.idt} onChange={e=>setRf(p=>({...p,idt:e.target.value}))} style={{...s.i,background:"#fff"}}/></div><div><label style={{fontSize:12,fontWeight:700,color:"#374151",display:"block",marginBottom:4}}>Validity (months) *</label><input type="number" value={rf.val} onChange={e=>setRf(p=>({...p,val:e.target.value}))} placeholder="12" style={{...s.i,background:"#fff",maxWidth:160}}/></div>{ne&&<div style={{background:"#fff",borderRadius:10,padding:"10px 14px",border:"1.5px solid #BBF7D0",fontSize:13}}>📅 <strong>New Expiry:</strong> <span style={{color:"#16A34A",fontWeight:800}}>{ne.toLocaleDateString("en-IN")}</span> ({dL(ne)}d)</div>}</div></div>
+            <div style={{display:"flex",gap:10}}><button onClick={doRen} disabled={!rf.idt||!rf.val} style={{background:(!rf.idt||!rf.val)?"#D1D5DB":"linear-gradient(135deg,#16A34A,#22C55E)",color:"#fff",border:"none",padding:"12px 28px",borderRadius:12,fontWeight:800,fontSize:14,flex:1,cursor:(!rf.idt||!rf.val)?"not-allowed":"pointer"}}>🔄 Confirm</button><button onClick={()=>{setRm(null);setRf({ao:"",idt:"",val:""});}} style={{background:"#F3F4F6",color:"#6B7280",border:"none",padding:"12px 24px",borderRadius:12,fontWeight:700,fontSize:14}}>Cancel</button></div>
+          </div>
+        </div>;})()}
+    </div></div>;
+  }
+
+  // HISTORY
+  if(pg==="history"){
+    const fH=allH.filter(r=>{if(hB!=="All"&&r.bd!==hB)return false;if(hL!=="All"&&r.lk!==hL)return false;if(hQ)return(r.sn+r.cy+r.bd).toLowerCase().includes(hQ.toLowerCase());return true;});
+    const fP=allPayHistory.filter(r=>{if(hB!=="All"&&r.bd!==hB)return false;if(hL!=="All"&&r.lk!==hL)return false;if(hQ)return(r.sn+r.cy+r.bd+r.vendorL+r.invoiceNo).toLowerCase().includes(hQ.toLowerCase());return true;});
+    const totalPaid=allPayHistory.reduce((a,r)=>a+r.amount,0);
+    return<div style={{background:"#F0F2F5",minHeight:"100vh"}}><NV pg={pg} go={go} n={st.length} u={u} lo={lo}/>
+    <div style={{padding:"20px 24px"}} className="fi">
+      <h2 style={{fontSize:22,fontWeight:800,marginBottom:4}}>📜 History</h2>
+      <p style={{color:"#6B7280",fontSize:13,marginBottom:16}}>Archive of past license renewals and logged bill payments.</p>
+      <div style={{display:"flex",gap:6,marginBottom:16}}>
+        <button onClick={()=>setHTab("renewals")} style={{background:hTab==="renewals"?"linear-gradient(135deg,#4F46E5,#6366F1)":"#fff",color:hTab==="renewals"?"#fff":"#374151",border:"1px solid "+(hTab==="renewals"?"#4F46E5":"#E5E7EB"),padding:"9px 18px",borderRadius:12,fontWeight:700,fontSize:13}}>📜 Renewals ({allH.length})</button>
+        <button onClick={()=>setHTab("payments")} style={{background:hTab==="payments"?"linear-gradient(135deg,#16A34A,#22C55E)":"#fff",color:hTab==="payments"?"#fff":"#374151",border:"1px solid "+(hTab==="payments"?"#16A34A":"#E5E7EB"),padding:"9px 18px",borderRadius:12,fontWeight:700,fontSize:13}}>💳 Payments ({allPayHistory.length})</button>
+      </div>
+
+      {hTab==="renewals"?(
+      allH.length===0?<div style={{...s.cd,textAlign:"center",padding:60}}><div style={{fontSize:56,marginBottom:12}}>📭</div><h3 style={{fontSize:18,fontWeight:700}}>No Renewal History Yet</h3><p style={{color:"#6B7280",fontSize:13}}>Renew a license in Expiry Tracker to see data here.</p></div>
+      :<><div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}><div style={{...s.cd,padding:"14px 22px",borderRadius:14,background:"linear-gradient(135deg,#EEF2FF,#E0E7FF)",textAlign:"center"}}><div style={{fontSize:28,fontWeight:900,color:"#4F46E5"}}>{allH.length}</div><div style={{fontSize:11,color:"#6B7280",fontWeight:600}}>Renewals</div></div><div style={{...s.cd,padding:"14px 22px",borderRadius:14,textAlign:"center"}}><div style={{fontSize:28,fontWeight:900,color:"#7C3AED"}}>{new Set(allH.map(r=>r.sid)).size}</div><div style={{fontSize:11,color:"#6B7280",fontWeight:600}}>Stores</div></div></div>
+      <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}><input value={hQ} onChange={e=>setHQ(e.target.value)} placeholder="🔍 Search..." style={{...s.i,maxWidth:240}}/><select value={hB} onChange={e=>setHB(e.target.value)} style={{...s.i,width:"auto",minWidth:120}}><option value="All">All Brands</option>{br.map(b=><option key={b}>{b}</option>)}</select><select value={hL} onChange={e=>setHL(e.target.value)} style={{...s.i,width:"auto",minWidth:140}}><option value="All">All Licenses</option>{L.map(l=><option key={l.k} value={l.k}>{l.i} {l.l}</option>)}</select></div>
+      <div style={{...s.cd,padding:0,overflow:"auto",maxHeight:"62vh",borderRadius:14}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr>{["#","Store","City","Brand","License","Cycle","Applied","Issued","Validity","Expiry","Renewed On"].map(h=><th key={h} style={{...s.th,background:"#4338CA",color:"#fff"}}>{h}</th>)}</tr></thead>
+      <tbody>{fH.map((r,i)=><tr key={i} className="hr" style={{background:i%2===0?"#fff":"#FAFBFC"}}><td style={{...s.td,color:"#9CA3AF",fontSize:11}}>{i+1}</td><td style={{...s.td,fontWeight:700}}>{r.sn}</td><td style={{...s.td,color:"#6B7280"}}>{r.cy}</td><td style={s.td}><Bg t={r.bd}/></td><td style={s.td}><span style={{color:r.lc,fontWeight:700,fontSize:12}}>{r.li} {r.ll}</span></td><td style={{...s.td,textAlign:"center"}}><Bg t={"Cycle "+r.cn}/></td><td style={{...s.td,fontSize:12}}>{r.ao||"—"}</td><td style={{...s.td,fontSize:12}}>{r.idt||"—"}</td><td style={{...s.td,fontSize:12}}>{r.val?r.val+"m":"—"}</td><td style={{...s.td,fontWeight:600,fontSize:12}}>{r.expiry}</td><td style={s.td}><Bg t={r.renewedOn} bg="#FEF3C7" c="#D97706"/></td></tr>)}</tbody></table></div></>
+      ):(
+      allPayHistory.length===0?<div style={{...s.cd,textAlign:"center",padding:60}}><div style={{fontSize:56,marginBottom:12}}>💳</div><h3 style={{fontSize:18,fontWeight:700}}>No Payments Logged Yet</h3><p style={{color:"#6B7280",fontSize:13}}>Log a payment from a bill's "Manage" popup in 💰 Ledger to see it here.</p></div>
+      :<><div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+        <div style={{...s.cd,padding:"14px 22px",borderRadius:14,background:"linear-gradient(135deg,#F0FDF4,#DCFCE7)",textAlign:"center"}}><div style={{fontSize:28,fontWeight:900,color:"#16A34A"}}>{allPayHistory.length}</div><div style={{fontSize:11,color:"#6B7280",fontWeight:600}}>Payments Logged</div></div>
+        <div style={{...s.cd,padding:"14px 22px",borderRadius:14,textAlign:"center"}}><div style={{fontSize:28,fontWeight:900,color:"#4F46E5"}}>{fmtINR(totalPaid)}</div><div style={{fontSize:11,color:"#6B7280",fontWeight:600}}>Total Paid (all time)</div></div>
+      </div>
+      <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}><input value={hQ} onChange={e=>setHQ(e.target.value)} placeholder="🔍 Search store, team, invoice no..." style={{...s.i,maxWidth:260}}/><select value={hB} onChange={e=>setHB(e.target.value)} style={{...s.i,width:"auto",minWidth:120}}><option value="All">All Brands</option>{br.map(b=><option key={b}>{b}</option>)}</select><select value={hL} onChange={e=>setHL(e.target.value)} style={{...s.i,width:"auto",minWidth:140}}><option value="All">All Licenses</option>{L.map(l=><option key={l.k} value={l.k}>{l.i} {l.l}</option>)}</select></div>
+      <div style={{...s.cd,padding:0,overflow:"auto",maxHeight:"62vh",borderRadius:14}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr>{["#","Store","City","Brand","License","Team","Invoice No.","Amount Paid","Paid On","Note"].map(h=><th key={h} style={{...s.th,background:"#166534",color:"#fff"}}>{h}</th>)}</tr></thead>
+      <tbody>{fP.map((r,i)=><tr key={i} className="hr" style={{background:i%2===0?"#fff":"#FAFBFC"}}>
+        <td style={{...s.td,color:"#9CA3AF",fontSize:11}}>{i+1}</td>
+        <td style={{...s.td,fontWeight:700}}>{r.sn}</td>
+        <td style={{...s.td,color:"#6B7280"}}>{r.cy}</td>
+        <td style={s.td}><Bg t={r.bd}/></td>
+        <td style={s.td}><span style={{color:r.lc,fontWeight:700,fontSize:12}}>{r.li} {r.ll}</span></td>
+        <td style={{...s.td,fontSize:12}}>{r.vendorL}</td>
+        <td style={{...s.td,fontSize:12}}>{r.invoiceNo||"—"}</td>
+        <td style={{...s.td,fontWeight:800,color:"#16A34A"}}>{fmtINR(r.amount)}</td>
+        <td style={{...s.td,fontSize:12}}>{r.date}</td>
+        <td style={{...s.td,fontSize:12,color:"#6B7280"}}>{r.note||"—"}</td>
+      </tr>)}</tbody></table></div></>
+      )}
+    </div></div>;
+  }
+
+  // FEES (statutory reference)
+  if(pg==="fees"){return<div style={{background:"#F0F2F5",minHeight:"100vh"}}><NV pg={pg} go={go} n={st.length} u={u} lo={lo}/><div style={{padding:"20px 24px"}} className="fi">
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}><div><h2 style={{fontSize:22,fontWeight:800}}>📖 State Statutory Fee Reference</h2><p style={{color:"#6B7280",fontSize:13}}>Rough govt. fee ranges by state — not billing. See 💰 Ledger for vendor charges.</p></div><div style={{display:"flex",gap:8}}><input value={nF} onChange={e=>setNF(e.target.value)} placeholder="New state..." style={{...s.i,width:150}}/><button onClick={()=>{if(!nF||fe[nF])return;const e={};L.forEach(l=>e[l.k]="");e.total="";setFe(p=>({...p,[nF]:e}));setNF("");}} style={s.bt}>+ Add</button></div></div>
+    <div style={{...s.cd,padding:0,overflow:"auto",borderRadius:14}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr><th style={{...s.th,background:"#4338CA",color:"#fff",minWidth:120}}>State</th>{L.map(l=><th key={l.k} style={{...s.th,background:"#4338CA",color:"#fff",textAlign:"center",minWidth:90}}>{l.i} {l.l}</th>)}<th style={{...s.th,background:"#4338CA",color:"#fff",textAlign:"center"}}>Total</th><th style={{...s.th,background:"#4338CA",width:36}}></th></tr></thead>
+    <tbody>{Object.entries(fe).map(([k,v],i)=><tr key={k} className="hr" style={{background:i%2===0?"#fff":"#FAFBFC"}}><td style={{...s.td,fontWeight:700}}>{k}</td>{L.map(l=><td key={l.k} style={s.td}><input value={v[l.k]||""} onChange={e=>setFe(p=>({...p,[k]:{...p[k],[l.k]:e.target.value}}))} style={{...s.c,textAlign:"center",width:"100%"}}/></td>)}<td style={s.td}><input value={v.total||""} onChange={e=>setFe(p=>({...p,[k]:{...p[k],total:e.target.value}}))} style={{...s.c,textAlign:"center",width:"100%",fontWeight:700,color:"#16A34A"}}/></td><td style={s.td}><button onClick={()=>{const c={...fe};delete c[k];setFe(c);}} style={{background:"#FEE2E2",color:"#DC2626",border:"none",padding:"5px 8px",borderRadius:6,fontSize:11}}>🗑️</button></td></tr>)}</tbody></table></div>
+  </div></div>;}
+
+  // MASTER
+  if(pg==="master"){const tg=(i,l)=>{setSt(p=>p.map(x=>{if(x.id!==i)return x;return{...x,lics:x.lics.includes(l)?x.lics.filter(z=>z!==l):[...x.lics,l]};}));if(!ld[i]?.[l]){const w={};W.forEach(f=>{w[f.k]=f.t==="ck"?false:"";});setLd(p=>({...p,[i]:{...p[i],[l]:w}}));}};
+    return<div style={{background:"#F0F2F5",minHeight:"100vh"}}><NV pg={pg} go={go} n={st.length} u={u} lo={lo}/><div style={{padding:"20px 24px"}} className="fi">
+      <h2 style={{fontSize:22,fontWeight:800,marginBottom:14}}>🏪 Store Master</h2>
+      <div style={{...s.cd,padding:0,overflow:"auto",maxHeight:"75vh",borderRadius:14}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr><th style={{...s.th,position:"sticky",left:0,zIndex:3,background:"#F9FAFB",minWidth:200}}>Store</th><th style={s.th}>City</th><th style={s.th}>Brand</th>{L.map(l=><th key={l.k} style={{...s.th,textAlign:"center",color:l.c,fontSize:9}}>{l.i} {l.l}</th>)}<th style={{...s.th,width:36}}></th></tr></thead>
+      <tbody>{st.map((x,i)=><tr key={x.id} className="hr" style={{background:i%2===0?"#fff":"#FAFBFC"}}><td style={{...s.td,position:"sticky",left:0,background:i%2===0?"#fff":"#FAFBFC",zIndex:1}}><input value={x.name} onChange={e=>uS(x.id,"name",e.target.value)} style={{...s.c,fontWeight:700,minWidth:190,width:"100%"}}/></td><td style={s.td}><input value={x.city} onChange={e=>uS(x.id,"city",e.target.value)} style={{...s.c,minWidth:80}}/></td><td style={s.td}><input value={x.brand} onChange={e=>uS(x.id,"brand",e.target.value)} style={{...s.c,minWidth:70}}/></td>{L.map(l=><td key={l.k} style={{...s.td,textAlign:"center"}}><input type="checkbox" checked={x.lics.includes(l.k)} onChange={()=>tg(x.id,l.k)} style={{width:16,height:16,accentColor:l.c}}/></td>)}<td style={s.td}><button onClick={()=>setSt(p=>p.filter(z=>z.id!==x.id))} style={{background:"#FEE2E2",color:"#DC2626",border:"none",padding:"5px 8px",borderRadius:6,fontSize:11}}>🗑️</button></td></tr>)}</tbody></table></div>
+    </div></div>;}
+
+  // DOCS
+  if(pg==="docs"){const dA=()=>{if(aI==="Bizops@2026"&&aP==="Zippee@1234"){setAu(true);setAE("");}else setAE("Invalid");};
+    if(!au)return<div style={{background:"#F0F2F5",minHeight:"100vh"}}><NV pg={pg} go={go} n={st.length} u={u} lo={lo}/><div style={{padding:24,display:"flex",justifyContent:"center",paddingTop:80}} className="fi"><div style={{...s.cd,width:380,textAlign:"center",padding:36,borderRadius:20}}><div style={{fontSize:48,marginBottom:12}}>🔐</div><h2 style={{fontSize:20,fontWeight:800,marginBottom:20}}>Document Access</h2><input placeholder="User ID" value={aI} onChange={e=>setAI(e.target.value)} style={{...s.i,marginBottom:10}}/><div style={{marginBottom:14}}><PwInput value={aP} onChange={e=>setAP(e.target.value)} placeholder="Password" style={s.i} onKeyDown={e=>e.key==="Enter"&&dA()}/></div>{aE&&<div style={{color:"#DC2626",fontSize:12,marginBottom:10}}>{aE}</div>}<button onClick={dA} style={{...s.bt,width:"100%",padding:12}}>Authenticate</button></div></div></div>;
+    return<div style={{background:"#F0F2F5",minHeight:"100vh"}}><NV pg={pg} go={go} n={st.length} u={u} lo={lo}/><div style={{padding:24,display:"flex",justifyContent:"center",paddingTop:60}} className="fi"><div style={{...s.cd,width:500,textAlign:"center",padding:40,borderRadius:20}}><Bg t="✓ Authenticated" bg="#DCFCE7" c="#16A34A"/><div style={{fontSize:56,margin:"20px 0"}}>📂</div><h2 style={{fontSize:22,fontWeight:800,marginBottom:24}}>Documents on Google Drive</h2><a href={GD} target="_blank" rel="noopener noreferrer" style={{display:"inline-block",background:"linear-gradient(135deg,#4F46E5,#7C3AED)",color:"#fff",padding:"14px 36px",borderRadius:12,fontSize:15,fontWeight:800,textDecoration:"none"}}>📂 Open Drive</a></div></div></div>;
+  }
+
+  // ADD
+  if(pg==="add"){return<div style={{background:"#F0F2F5",minHeight:"100vh"}}><NV pg={pg} go={go} n={st.length} u={u} lo={lo}/><div style={{padding:24,maxWidth:520}} className="fi">
+    <h2 style={{fontSize:22,fontWeight:800,marginBottom:16}}>➕ Add Store</h2>
+    <div style={{...s.cd,display:"grid",gap:14,borderRadius:16}}>
+      <div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:4}}>Store Name (ZD format) *</label><input value={nS.name} onChange={e=>setNS(p=>({...p,name:e.target.value}))} style={s.i} placeholder="ZD FNP Sarjapur"/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:4}}>City *</label><input value={nS.city} onChange={e=>setNS(p=>({...p,city:e.target.value}))} style={s.i}/></div><div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:4}}>Brand *</label><input value={nS.brand} onChange={e=>setNS(p=>({...p,brand:e.target.value}))} style={s.i}/></div></div>
+      <div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:6}}>Licenses</label><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{L.map(l=><label key={l.k} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,padding:"6px 10px",borderRadius:8,background:nS.lics.includes(l.k)?l.f:"#F9FAFB",border:"1.5px solid "+(nS.lics.includes(l.k)?l.c+"44":"#E5E7EB"),cursor:"pointer"}}><input type="checkbox" checked={nS.lics.includes(l.k)} style={{accentColor:l.c}} onChange={()=>setNS(p=>({...p,lics:p.lics.includes(l.k)?p.lics.filter(z=>z!==l.k):[...p.lics,l.k]}))}/>{l.i} {l.l}</label>)}</div></div>
+      <button onClick={()=>{if(!nS.name||!nS.city||!nS.brand)return;const id=String(Date.now());const uniqLics=[...new Set(nS.lics)];setSt(p=>[...p,{id,name:nS.name,city:nS.city,brand:nS.brand,lics:uniqLics}]);const w={};uniqLics.forEach(l=>{const z={};W.forEach(f=>{z[f.k]=f.t==="ck"?false:"";});w[l]=z;});setLd(p=>({...p,[id]:w}));setNS({name:"",city:"",brand:"",lics:[]});go("home");}} style={{...s.bt,opacity:(!nS.name||!nS.city||!nS.brand)?.4:1,padding:12}}>Add Store</button>
+    </div>
+  </div></div>;}
+
+  // DASHBOARD
+  const tg=sid?[store]:fl;const ss={};L.forEach(l=>{let t=0,v=0;tg.forEach(x=>{const inLics=x.lics.includes(l.k);const hasData=ld[x.id]?.[l.k]&&pc(ld[x.id][l.k])>0;if(inLics||hasData){t++;v+=pc(ld[x.id]?.[l.k]);}});ss[l.k]=t>0?Math.round(v/t):-1;});
+  let tp=0;
+  if(store){
+    const relL=L.filter(l=>store.lics.includes(l.k)||(ld[store.id]?.[l.k]&&pc(ld[store.id][l.k])>0));
+    if(relL.length>0){tp=Math.round(relL.reduce((a,l)=>a+pc(ld[store.id]?.[l.k]),0)/relL.length);}
+  }else{
+    const ov=Object.values(ss).filter(v=>v>=0);tp=ov.length?Math.round(ov.reduce((a,b)=>a+b,0)/ov.length):0;
+  }
+
+  return<div style={{background:"#F0F2F5",minHeight:"100vh"}} onClick={()=>setDr(false)}><NV pg={pg} go={go} n={st.length} u={u} lo={lo}/>
+    <div style={{padding:"14px 24px 0",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+      <div style={{position:"relative",flex:"1 1 280px",maxWidth:380}} onClick={e=>e.stopPropagation()}>
+        <input value={q} onChange={e=>{setQ(e.target.value);setDr(true);if(!e.target.value){setSid(null);setLk(null);}}} onFocus={()=>setDr(true)} placeholder="🔍 Search store..." style={{...s.i,paddingRight:sid?26:14}}/>
+        {sid&&<span onClick={()=>{setSid(null);setQ("");setLk(null);}} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",cursor:"pointer",color:"#9CA3AF",fontSize:18,fontWeight:700}}>×</span>}
+        {dr&&!sid&&<div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1px solid #E5E7EB",borderRadius:14,marginTop:4,maxHeight:260,overflowY:"auto",zIndex:40,boxShadow:"0 10px 30px rgba(0,0,0,.1)"}}>
+          <div onClick={()=>{setSid(null);setQ("");setDr(false);}} style={{padding:"8px 14px",cursor:"pointer",borderBottom:"2px solid #F3F4F6",fontSize:12,color:"#4F46E5",fontWeight:700}}>📊 All Stores</div>
+          {sg.map(x=><div key={x.id} onClick={()=>{setSid(x.id);setDr(false);setQ(x.name);setLk(null);}} style={{padding:"8px 14px",cursor:"pointer",borderBottom:"1px solid #F3F4F6",fontSize:12}} onMouseEnter={e=>e.currentTarget.style.background="#F9FAFB"} onMouseLeave={e=>e.currentTarget.style.background="#fff"}><strong>{x.name}</strong> <span style={{color:"#9CA3AF",fontSize:11}}>{x.city} · {x.brand}</span></div>)}
+        </div>}
+      </div>
+      <select value={fC} onChange={e=>{setFC(e.target.value);setSid(null);setQ("");}} style={{...s.i,width:"auto",minWidth:120}}><option value="All">All Cities</option>{ci.map(c=><option key={c}>{c}</option>)}</select>
+      <select value={fB} onChange={e=>{setFB(e.target.value);setSid(null);setQ("");}} style={{...s.i,width:"auto",minWidth:120}}><option value="All">All Brands</option>{br.map(b=><option key={b}>{b}</option>)}</select>
+      {store&&<Bg t={"✓ "+store.name}/>}
+    </div>
+    <div style={{padding:"14px 24px"}} className="fi">
+      {(eS.e>0||eS.c>0)&&<div style={{background:"#FEF2F2",border:"1.5px solid #FECACA",borderRadius:14,padding:"12px 18px",marginBottom:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}><span style={{fontSize:20}}>⚠️</span><div style={{flex:1}}><strong style={{color:"#DC2626"}}>Expiry Alert:</strong> <span style={{color:"#6B7280",fontSize:13}}>{eS.e} expired, {eS.c} within 30d</span></div><button onClick={()=>go("expiry")} style={{background:"#DC2626",color:"#fff",border:"none",padding:"6px 16px",borderRadius:8,fontWeight:700,fontSize:12}}>View →</button></div>}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><div><h2 style={{fontSize:22,fontWeight:800}}>{store?store.name:"All Stores"}</h2><p style={{color:"#6B7280",fontSize:13}}>{store?store.city+" · "+store.brand:tg.length+" stores"}</p></div><div style={{textAlign:"right"}}><div style={{fontSize:34,fontWeight:900,color:tp===100?"#16A34A":tp>=50?"#4F46E5":"#EF4444"}}>{tp}%</div><div style={{fontSize:11,color:"#9CA3AF"}}>Compliance</div></div></div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:12,marginBottom:20}}>{L.map(l=>{
+        const hasStores=ss[l.k]>=0;
+        const hasStoreData=store&&ld[store.id]?.[l.k]&&pc(ld[store.id][l.k])>0;
+        let v=ss[l.k]>=0?ss[l.k]:0;
+        if(store&&(store.lics.includes(l.k)||hasStoreData)){
+          v=pc(ld[store.id]?.[l.k]);
+        }
+        const showCard=hasStores||hasStoreData;
+        return<div key={l.k} onClick={()=>{if(store)setLk(l.k);}} style={{...s.cd,background:l.bg,border:"1.5px solid "+l.b,cursor:store?"pointer":"default",padding:16,borderRadius:16,transition:"all .2s",opacity:showCard||store?1:.7}}><div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}><span style={{fontSize:22}}>{l.i}</span><span style={{fontSize:13,fontWeight:700,color:"#374151"}}>{l.l}</span></div><div style={{fontSize:30,fontWeight:900,color:l.c,marginBottom:6}}>{v}%</div><Bar v={v} c={l.c} h={8}/>{store&&(showCard||store.lics.includes(l.k))&&<div style={{fontSize:10,color:"#9CA3AF",marginTop:8}}>Click →</div>}{!showCard&&!store&&<div style={{fontSize:10,color:"#D1D5DB",marginTop:8}}>No stores assigned</div>}</div>;})}
+        <div onClick={()=>setAddLicModal(true)} style={{...s.cd,border:"2px dashed #D1D5DB",cursor:"pointer",padding:16,borderRadius:16,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:140,transition:"all .2s",background:"#FAFBFC"}} onMouseEnter={e=>{e.currentTarget.style.borderColor="#4F46E5";e.currentTarget.style.background="#EEF2FF";}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#D1D5DB";e.currentTarget.style.background="#FAFBFC";}}>
+          <div style={{width:48,height:48,borderRadius:14,background:"linear-gradient(135deg,#4F46E5,#6366F1)",display:"flex",alignItems:"center",justifyContent:"center",marginBottom:10}}><span style={{fontSize:24,color:"#fff"}}>+</span></div>
+          <span style={{fontSize:12,fontWeight:700,color:"#6B7280"}}>Add License</span>
+        </div>
+      </div>
+
+      {addLicModal&&<div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}} onClick={()=>{setAddLicModal(false);setNewLicName("");}}>
+        <div style={{background:"#fff",borderRadius:20,padding:32,maxWidth:420,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,.2)"}} onClick={e=>e.stopPropagation()} className="fi">
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
+            <div style={{width:44,height:44,borderRadius:12,background:"linear-gradient(135deg,#4F46E5,#6366F1)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,color:"#fff"}}>+</div>
+            <h3 style={{fontSize:18,fontWeight:800}}>Add New License Type</h3>
+            <button onClick={()=>{setAddLicModal(false);setNewLicName("");}} style={{marginLeft:"auto",background:"#F3F4F6",border:"none",width:36,height:36,borderRadius:10,fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",color:"#6B7280"}}>×</button>
+          </div>
+          <p style={{color:"#6B7280",fontSize:13,marginBottom:16}}>This license will be added across all sections — Dashboard, Expiry Tracker, Store Master, Ledger and Fees.</p>
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:12,fontWeight:700,color:"#374151",display:"block",marginBottom:5}}>License Name *</label>
+            <input value={newLicName} onChange={e=>setNewLicName(e.target.value)} placeholder="e.g. GST Registration, Labour License, Pollution NOC..." style={{...s.i}} onKeyDown={e=>e.key==="Enter"&&addNewLicense()}/>
+          </div>
+          {newLicName.trim()&&<div style={{background:"#F0FDF4",border:"1.5px solid #BBF7D0",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:13}}>
+            <strong>Preview:</strong> {EXTRA_ICONS[customL.length%EXTRA_ICONS.length]} <strong style={{color:EXTRA_COLORS[customL.length%EXTRA_COLORS.length]}}>{newLicName.trim()}</strong> will be added as a new license type.
+          </div>}
+          {customL.length>0&&<div style={{marginBottom:16}}>
+            <h4 style={{fontSize:12,fontWeight:700,color:"#6B7280",marginBottom:6}}>Custom licenses added ({customL.length})</h4>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{customL.map(cl=><span key={cl.k} style={{background:cl.f,color:cl.c,padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>{cl.i} {cl.l}</span>)}</div>
+          </div>}
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={addNewLicense} disabled={!newLicName.trim()} style={{...s.bt,flex:1,padding:12,opacity:newLicName.trim()?1:.4,cursor:newLicName.trim()?"pointer":"not-allowed"}}>Add License</button>
+            <button onClick={()=>{setAddLicModal(false);setNewLicName("");}} style={{background:"#F3F4F6",color:"#6B7280",border:"none",padding:"12px 24px",borderRadius:10,fontWeight:700,fontSize:14}}>Cancel</button>
+          </div>
+        </div>
+      </div>}
+      {!store&&<div style={{...s.cd,padding:0,overflow:"auto",borderRadius:14}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["Store","City","Brand","Progress"].map(h=><th key={h} style={s.th}>{h}</th>)}</tr></thead><tbody>{fl.map(x=>{const allLicKeys=[...new Set([...x.lics,...L.filter(l=>ld[x.id]?.[l.k]&&pc(ld[x.id][l.k])>0).map(l=>l.k)])];const avg=allLicKeys.length?Math.round(allLicKeys.reduce((a,l)=>a+pc(ld[x.id]?.[l]),0)/allLicKeys.length):0;return<tr key={x.id} className="hr" onClick={()=>{setSid(x.id);setQ(x.name);}} style={{cursor:"pointer"}}><td style={{...s.td,fontWeight:700}}>{x.name}</td><td style={{...s.td,color:"#6B7280"}}>{x.city}</td><td style={s.td}><Bg t={x.brand}/></td><td style={s.td}><div style={{display:"flex",alignItems:"center",gap:6}}><div style={{width:70}}><Bar v={avg}/></div><span style={{fontSize:12,fontWeight:800}}>{avg}%</span></div></td></tr>;})}</tbody></table></div>}
+      {store&&lk&&(()=>{const l=L.find(x=>x.k===lk);const d=ld[sid]?.[lk]||{};const pr=pc(d);const ex=gE(d);const dy=dL(ex);const gs=[...new Set(W.map(w=>w.g))];const lc=iC(sid,lk);const hk=sid+"_"+lk;const ht=hi[hk]||[];
+        return<div style={{marginTop:18}}>
+          <button onClick={()=>setLk(null)} style={{background:"#EEF2FF",border:"none",color:"#4F46E5",padding:"8px 16px",borderRadius:10,fontWeight:700,fontSize:13,marginBottom:12}}>← Back</button>
+          <div style={{...s.cd,borderLeft:"5px solid "+l.c,borderRadius:16}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12,marginBottom:14}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:28}}>{l.i}</span><div><h3 style={{fontSize:18,fontWeight:800,color:l.c}}>{l.l}</h3><p style={{fontSize:12,color:"#6B7280"}}>{store.name}</p></div></div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}><div style={{textAlign:"right"}}><div style={{fontSize:24,fontWeight:900,color:l.c}}>{pr}%</div><div style={{width:100}}><Bar v={pr} c={l.c} h={8}/></div></div>{lc&&<Bg t="✓ Confirmed" bg="#DCFCE7" c="#16A34A"/>}</div>
+            </div>
+            {ex&&<div style={{background:dy<30?"#FEF2F2":dy<90?"#FFFBEB":"#F0FDF4",border:"1.5px solid "+(dy<30?"#FECACA":dy<90?"#FDE68A":"#BBF7D0"),borderRadius:12,padding:"10px 16px",marginBottom:16,fontSize:13}}>📅 Expiry: <strong>{ex.toLocaleDateString("en-IN")}</strong> · <strong style={{color:dy<30?"#DC2626":dy<90?"#D97706":"#16A34A"}}>{dy>0?dy+"d left":"EXPIRED"}</strong></div>}
+            {lc&&<div style={{background:"#F0FDF4",border:"1.5px solid #BBF7D0",borderRadius:12,padding:"12px 18px",marginBottom:16,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}><span style={{fontSize:18}}>✓</span><div style={{flex:1}}><strong style={{color:"#16A34A"}}>Confirmed</strong><span style={{color:"#6B7280",fontSize:12,marginLeft:8}}>Click Edit to change</span></div><button onClick={()=>tC(sid,lk)} style={{background:"#4F46E5",color:"#fff",border:"none",padding:"6px 14px",borderRadius:8,fontWeight:700,fontSize:12}}>✏️ Edit</button></div>}
+            {ht.length>0&&<div style={{background:"#EEF2FF",borderRadius:10,padding:"8px 14px",marginBottom:14,display:"flex",alignItems:"center",gap:8,fontSize:13}}><span>📜</span><span style={{color:"#4F46E5",fontWeight:600}}>{ht.length} past renewal{ht.length>1?"s":""}</span><button onClick={()=>go("history")} style={{marginLeft:"auto",background:"#4F46E5",color:"#fff",border:"none",padding:"4px 12px",borderRadius:6,fontWeight:700,fontSize:11}}>View →</button></div>}
+            {(()=>{const le=getLg(sid,lk);const amt=computedAmount(le,lk);const paidAmt=Number(le.paidAmount)||0;const rem=Math.max(amt-paidAmt,0);const payLabel=amt<=0?"—":paidAmt<=0?"Unpaid":rem<=0?"Fully Paid":"Partially Paid ("+fmtINR(rem)+" left)";return<div style={{background:"#FFFBEB",border:"1.5px solid #FDE68A",borderRadius:10,padding:"8px 14px",marginBottom:14,display:"flex",alignItems:"center",gap:8,fontSize:13,flexWrap:"wrap"}}><span>💰</span><span style={{color:"#92400E",fontWeight:600}}>Ledger: {le.vendor?(ALLV.find(v=>v.k===le.vendor)?.l||le.vendor):"No vendor set"} · {fmtINR(amt)} · {payLabel}</span><button onClick={()=>go("ledger")} style={{marginLeft:"auto",background:"#D97706",color:"#fff",border:"none",padding:"4px 12px",borderRadius:6,fontWeight:700,fontSize:11}}>Open Ledger →</button></div>;})()}
+            {!lc&&<DocExtract onApply={r=>{
+              if(r.applied_date)up(sid,lk,"ao",r.applied_date);
+              if(r.issue_date)up(sid,lk,"idt",r.issue_date);
+              if(r.validity_months)up(sid,lk,"val",r.validity_months);
+              if(r.application_number)up(sid,lk,"an",r.application_number);
+            }}/>}
+            {gs.map(g=><div key={g} style={{marginBottom:16}}><h4 style={{fontSize:13,fontWeight:800,color:"#374151",borderBottom:"2px solid #F3F4F6",paddingBottom:5,marginBottom:8}}>{g}</h4><div style={{display:"grid",gap:6}}>
+              {W.filter(w=>w.g===g).map(w=>{const v=d[w.k];const fi=w.t==="ck"?v===true:(v&&String(v).trim()!=="");const di=lc;const rb=lc?(fi?"#F0FDF4":"#FEF2F2"):"#F9FAFB";const rb2=lc?(fi?"1px solid #BBF7D0":"1px solid #FECACA"):"1px solid #F3F4F6";
+                return<div key={w.k} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 12px",background:rb,borderRadius:8,border:rb2,opacity:di?.85:1}}>
+                  {lc&&<div style={{width:20,height:20,borderRadius:5,background:fi?"#16A34A":"#EF4444",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#fff",fontWeight:800,flexShrink:0}}>{fi?"✓":"!"}</div>}
+                  <div style={{minWidth:160,fontSize:12,fontWeight:600,color:"#374151"}}>{w.l}</div>
+                  <div style={{flex:1}}>
+                    {w.t==="ck"?<label style={{display:"flex",alignItems:"center",gap:6,fontSize:12}}><input type="checkbox" checked={!!d[w.k]} onChange={e=>{if(!di)up(sid,lk,w.k,e.target.checked);}} disabled={di} style={{width:16,height:16,accentColor:l.c}}/><span style={{color:d[w.k]?"#16A34A":"#9CA3AF",fontWeight:700}}>{d[w.k]?"✓ Done":"Pending"}</span></label>
+                    :w.t==="sl"?<select value={d[w.k]||""} onChange={e=>{if(!di)up(sid,lk,w.k,e.target.value);}} disabled={di} style={{...s.i,maxWidth:200,fontSize:12,opacity:di?.7:1}}><option value="">Select...</option>{w.o.map(o=><option key={o}>{o}</option>)}</select>
+                    :w.t==="ta"?<textarea value={d[w.k]||""} onChange={e=>{if(!di)up(sid,lk,w.k,e.target.value);}} readOnly={di} style={{...s.i,minHeight:36,resize:"vertical",fontSize:12,opacity:di?.7:1}} placeholder="Enter..."/>
+                    :w.t==="ur"?<div style={{display:"flex",gap:6}}><input value={d[w.k]||""} onChange={e=>{if(!di)up(sid,lk,w.k,e.target.value);}} readOnly={di} style={{...s.i,fontSize:12,opacity:di?.7:1}} placeholder="G-Drive link..."/>{d[w.k]&&<a href={d[w.k]} target="_blank" rel="noopener noreferrer" style={{background:"#16A34A",color:"#fff",padding:"6px 12px",borderRadius:6,fontSize:11,fontWeight:700,textDecoration:"none",whiteSpace:"nowrap"}}>Open↗</a>}</div>
+                    :<input type={w.t==="nm"?"number":"text"} value={d[w.k]||""} onChange={e=>{if(!di)up(sid,lk,w.k,e.target.value);}} readOnly={di} style={{...s.i,maxWidth:w.t==="dt"?170:w.k==="an"?520:120,fontSize:12,opacity:di?.7:1}} placeholder={w.k==="an"?"e.g. APP-2025-123456":""}/>}
+                  </div>
+                </div>;})}
+            </div></div>)}
+            {!lc&&<div style={{paddingTop:14,borderTop:"2px solid #F3F4F6",display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}><button onClick={()=>tC(sid,lk)} style={{background:"linear-gradient(135deg,#16A34A,#22C55E)",color:"#fff",border:"none",padding:"10px 24px",borderRadius:10,fontWeight:800,fontSize:14}}>✓ Confirm & Save</button><span style={{fontSize:12,color:"#9CA3AF"}}>Locks fields. Edit later anytime.</span></div>}
+            {lc&&<div style={{paddingTop:14,borderTop:"2px solid #F3F4F6",fontSize:12,color:"#6B7280"}}>📊 <strong>{pr}%</strong> — {W.filter(f=>{const v=d[f.k];return f.t==="ck"?v===true:(v&&String(v).trim()!=="");}).length}/{W.length} filled</div>}
+          </div>
+        </div>;})()}
+    </div>
+  </div>;
+}
+
+// ================= LEDGER PAGE =================
+function LedgerPage({st,L,VENDORS,ALLV,rates,setRates,lg,getLg,setLgField,computedAmount,isExcludedVendor,addPayment,removePayment,ensureStoreHasLicense,customL,setCustomL,customV,setCustomV,ci,br,go,pg,u,lo}){
+  const[tab,setTab]=useState("ledger"); // ledger | rates
+  const[nvName,setNvName]=useState("");
+  const[billModal,setBillModal]=useState(null); // {storeId,lk} — drives the "Manage Bill" popup
+  const[newBillModal,setNewBillModal]=useState(false);
+  const[nbStore,setNbStore]=useState("");
+  const[nbLic,setNbLic]=useState("");
+  const[nbVendor,setNbVendor]=useState("");
+  const[nbAddingNew,setNbAddingNew]=useState(false);
+  const[nbNewLicName,setNbNewLicName]=useState("");
+  const labelStyle={fontSize:11,fontWeight:700,color:"#374151",display:"block",marginBottom:4};
+
+  // ---- filter strip (mirrors ProcureFlow's Bills & Payments: Store / Vendor / Payment / Search) ----
+  const[fStore,setFStore]=useState("");
+  const[fVendor,setFVendor]=useState("");
+  const[fPayment,setFPayment]=useState("");
+  const[fSearch,setFSearch]=useState("");
+
+  const rowInfo=(storeId,lk)=>{
+    const e=getLg(storeId,lk);
+    const amt=computedAmount(e,lk);
+    const paid=Number(e.paidAmount)||0;
+    const remaining=Math.max(amt-paid,0);
+    const excl=isExcludedVendor(e.vendor);
+    const payState=excl||amt<=0?"na":paid<=0?"unpaid":remaining<=0?"full":"partial";
+    return{e,amt,paid,remaining,excl,payState};
+  };
+
+  const addVendor=()=>{
+    if(!nvName.trim())return;
+    const key="v_"+Date.now();
+    const col=EXTRA_COLORS[(VENDORS.length)%EXTRA_COLORS.length];
+    setCustomV(p=>[...p,{k:key,l:nvName.trim(),c:col}]);
+    setRates(p=>({...p,[key]:{}}));
+    setNvName("");
+  };
+
+  // ---- every store×license slot that has actually got some bill data on it ----
+  const allBills=useMemo(()=>{
+    const list=[];
+    st.forEach(x=>x.lics.forEach(lk=>{
+      const e=getLg(x.id,lk);
+      const hasData=e.vendor||e.amount||e.invoiceNo||e.paidAmount||e.billLink||e.appliedDate;
+      if(!hasData)return;
+      const{amt,paid,remaining,excl,payState}=rowInfo(x.id,lk);
+      list.push({x,lk,e,amt,paid,remaining,excl,payState});
+    }));
+    return list;
+  },[st,lg,rates]);
+
+  const filteredBills=useMemo(()=>{
+    return allBills.filter(b=>{
+      if(fStore&&b.x.id!==fStore)return false;
+      if(fVendor&&b.e.vendor!==fVendor)return false;
+      if(fPayment&&b.payState!==fPayment)return false;
+      if(fSearch){
+        const q=fSearch.toLowerCase();
+        const lic=L.find(z=>z.k===b.lk);
+        const hay=(b.x.name+" "+b.x.city+" "+b.x.brand+" "+(lic?lic.l:b.lk)+" "+(b.e.invoiceNo||"")).toLowerCase();
+        if(!hay.includes(q))return false;
+      }
+      return true;
+    });
+  },[allBills,fStore,fVendor,fPayment,fSearch,L]);
+
+  const kpi=useMemo(()=>({
+    totalBills:filteredBills.length,
+    paid:filteredBills.reduce((a,b)=>a+b.paid,0),
+    pending:filteredBills.reduce((a,b)=>a+(b.excl?0:b.remaining),0),
+    value:filteredBills.reduce((a,b)=>a+b.amt,0),
+  }),[filteredBills]);
+
+  const clearFilters=()=>{setFStore("");setFVendor("");setFPayment("");setFSearch("");};
+
+  // ---- export exactly what's currently filtered/visible ----
+  const exportBook=()=>{
+    const out=filteredBills.map(b=>{
+      const lic=L.find(z=>z.k===b.lk);
+      const vendor=ALLV.find(v=>v.k===b.e.vendor);
+      return{
+        "Store":b.x.name,"City":b.x.city,"Brand":b.x.brand,
+        "License":lic?lic.l:b.lk,"Compliance Team":vendor?vendor.l:"— Unassigned —",
+        "Applied Date":b.e.appliedDate||"—",
+        "Invoice Amount (₹)":b.amt,"Invoice No.":b.e.invoiceNo||"—",
+        "Paid Amount (₹)":b.paid,"Paid Date":b.e.paidDate||"—",
+        "Pending (₹)":b.remaining,"% Paid":b.amt>0?Math.round(b.paid/b.amt*100)+"%":"—",
+        "Type":(LEDGER_TYPES.find(t=>t.k===b.e.type)||{}).l||b.e.type,"Status":b.e.status||"NA",
+        "Bill Link (G-Drive)":b.e.billLink||"—","Notes":b.e.notes||""
+      };
+    });
+    if(out.length===0){alert("Nothing to export for this view.");return;}
+    downloadXLSX(out,"Zippee_Bills_"+new Date().toISOString().slice(0,10)+".xlsx","Bills","4338CA");
+  };
+
+  const openNewBill=()=>{
+    setNbStore(st[0]?.id||"");setNbLic("");setNbVendor(VENDORS[0]?.k||"");setNbNewLicName("");setNbAddingNew(false);setNewBillModal(true);
+  };
+  const nbStoreObj=st.find(x=>x.id===nbStore);
+  // any master license can be picked here — not just ones already on this store — picking one attaches it to the store
+  const nbLicOptions=L;
+  const createNewLicenseType=()=>{
+    if(!nbNewLicName.trim())return;
+    const key="custom_"+Date.now();
+    const idx=customL.length;
+    const col=EXTRA_COLORS[idx%EXTRA_COLORS.length];
+    const ico=EXTRA_ICONS[idx%EXTRA_ICONS.length];
+    const newL={k:key,l:nbNewLicName.trim(),i:ico,bg:"linear-gradient(135deg,"+col+"15,"+col+"25)",f:col+"15",b:col+"33",c:col};
+    setCustomL(p=>[...p,newL]);
+    setNbLic(key);
+    setNbNewLicName("");
+    setNbAddingNew(false);
+  };
+  const createBill=()=>{
+    if(!nbStore||!nbLic)return;
+    ensureStoreHasLicense(nbStore,nbLic);
+    setLgField(nbStore,nbLic,"vendor",nbVendor);
+    setNewBillModal(false);
+    setBillModal({storeId:nbStore,lk:nbLic});
+  };
+
+  return<div style={{background:"#F0F2F5",minHeight:"100vh"}}><NV pg={pg} go={go} n={st.length} u={u} lo={lo}/>
+  <div style={{padding:"20px 24px"}} className="fi">
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
+      <div><h2 style={{fontSize:22,fontWeight:800}}>💰 Bills &amp; Payments</h2><p style={{color:"#6B7280",fontSize:13}}>Every license bill in one place — invoice, G-Drive link, paid &amp; pending.</p></div>
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={()=>setTab(tab==="ledger"?"rates":"ledger")} style={{background:"#EEF2FF",color:"#4F46E5",border:"none",padding:"9px 16px",borderRadius:10,fontWeight:700,fontSize:12}}>{tab==="ledger"?"⚙️ Rate Cards":"← Back to Bills"}</button>
+        {tab==="ledger"&&<button onClick={openNewBill} style={s.bt}>➕ New Bill</button>}
+      </div>
+    </div>
+
+    {tab==="rates"?
+    <div style={{...s.cd,borderRadius:14}}>
+      <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center",flexWrap:"wrap"}}>
+        <input value={nvName} onChange={e=>setNvName(e.target.value)} placeholder="New compliance team / vendor name..." style={{...s.i,maxWidth:260}}/>
+        <button onClick={addVendor} style={s.bt}>+ Add Team</button>
+      </div>
+      {VENDORS.map(v=><div key={v.k} style={{marginBottom:22}}>
+        <h4 style={{fontSize:14,fontWeight:800,color:v.c,marginBottom:8}}>{v.l}</h4>
+        <div style={{overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:600}}><thead><tr>
+          <th style={{...s.th,background:"#F9FAFB"}}>License</th>
+          {LEDGER_TYPES.map(t=><th key={t.k} style={{...s.th,textAlign:"center",background:"#F9FAFB"}}>{t.l}</th>)}
+        </tr></thead><tbody>{L.map(l=><tr key={l.k} className="hr"><td style={{...s.td,fontWeight:700,color:l.c,fontSize:12}}>{l.i} {l.l}</td>
+          {LEDGER_TYPES.map(t=><td key={t.k} style={s.td}><input value={rates[v.k]?.[l.k]?.[t.k]??""} onChange={e=>{const val=e.target.value;setRates(p=>({...p,[v.k]:{...p[v.k],[l.k]:{...(p[v.k]?.[l.k]||{}),[t.k]:val}}}));}} style={{...s.c,width:80,textAlign:"center"}} placeholder="₹"/></td>)}
+        </tr>)}</tbody></table></div>
+      </div>)}
+    </div>
+    :<>
+    {/* ---- KPI row (Total Bills / Paid / Pending / Value) — scoped to whatever the filters below show ---- */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12,marginBottom:16}}>
+      <div style={{...s.cd,borderTop:"3px solid #4F46E5",borderRadius:14,padding:18}}>
+        <div style={{fontSize:26,fontWeight:900}}>{kpi.totalBills}</div>
+        <div style={{fontSize:12,color:"#9CA3AF",marginTop:4}}>Total Bills</div>
+      </div>
+      <div style={{...s.cd,borderTop:"3px solid #16A34A",borderRadius:14,padding:18}}>
+        <div style={{fontSize:26,fontWeight:900,color:"#16A34A"}}>{fmtINR(kpi.paid)}</div>
+        <div style={{fontSize:12,color:"#9CA3AF",marginTop:4}}>Amount Paid</div>
+      </div>
+      <div style={{...s.cd,borderTop:"3px solid #DC2626",borderRadius:14,padding:18}}>
+        <div style={{fontSize:26,fontWeight:900,color:"#DC2626"}}>{fmtINR(kpi.pending)}</div>
+        <div style={{fontSize:12,color:"#9CA3AF",marginTop:4}}>Amount Pending</div>
+      </div>
+      <div style={{...s.cd,borderTop:"3px solid #7C3AED",borderRadius:14,padding:18}}>
+        <div style={{fontSize:26,fontWeight:900,color:"#7C3AED"}}>{fmtINR(kpi.value)}</div>
+        <div style={{fontSize:12,color:"#9CA3AF",marginTop:4}}>Total Invoice Value</div>
+      </div>
+    </div>
+
+    {/* ---- filter strip ---- */}
+    <div style={{...s.cd,borderRadius:14,padding:"12px 16px",display:"flex",gap:10,flexWrap:"wrap",alignItems:"center",marginBottom:16}}>
+      <span style={{fontSize:10,fontWeight:800,color:"#9CA3AF",textTransform:"uppercase",letterSpacing:".4px"}}>Store</span>
+      <select value={fStore} onChange={e=>setFStore(e.target.value)} style={{...s.i,width:"auto",minWidth:150}}><option value="">All</option>{st.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>
+      <span style={{fontSize:10,fontWeight:800,color:"#9CA3AF",textTransform:"uppercase",letterSpacing:".4px"}}>Team</span>
+      <select value={fVendor} onChange={e=>setFVendor(e.target.value)} style={{...s.i,width:"auto",minWidth:170}}>
+        <option value="">All</option>
+        <optgroup label="Compliance Teams">{VENDORS.map(v=><option key={v.k} value={v.k}>{v.l}</option>)}</optgroup>
+        <optgroup label="Excluded">{EXCL_VENDORS.map(v=><option key={v.k} value={v.k}>{v.l}</option>)}</optgroup>
+      </select>
+      <span style={{fontSize:10,fontWeight:800,color:"#9CA3AF",textTransform:"uppercase",letterSpacing:".4px"}}>Payment</span>
+      <select value={fPayment} onChange={e=>setFPayment(e.target.value)} style={{...s.i,width:"auto",minWidth:130}}>
+        <option value="">All</option><option value="full">Fully Paid</option><option value="partial">Partially Paid</option><option value="unpaid">Unpaid</option><option value="na">N/A</option>
+      </select>
+      <input value={fSearch} onChange={e=>setFSearch(e.target.value)} placeholder="🔍 Search store, license, invoice no..." style={{...s.i,maxWidth:240}}/>
+      <button onClick={clearFilters} style={{background:"#F3F4F6",color:"#6B7280",border:"none",padding:"9px 14px",borderRadius:10,fontWeight:600,fontSize:12}}>✕ Clear</button>
+      <button onClick={exportBook} style={{...s.gbt,marginLeft:"auto"}}>⬇️ Export</button>
+    </div>
+
+    {/* ---- bill cards ---- */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:14}}>
+      {filteredBills.length===0&&<div style={{gridColumn:"1/-1",...s.cd,textAlign:"center",padding:40,color:"#9CA3AF"}}>
+        <div style={{fontSize:40,marginBottom:10}}>🧾</div>
+        {allBills.length===0?"No bills yet — click ➕ New Bill to record your first invoice.":"No bills match these filters."}
+      </div>}
+      {filteredBills.map(c=>{
+        const lic=L.find(z=>z.k===c.lk);
+        const vendor=ALLV.find(v=>v.k===c.e.vendor);
+        const tagBg=c.payState==="full"?"#DCFCE7":c.payState==="partial"?"#FEF3C7":c.payState==="unpaid"?"#FEE2E2":"#F3F4F6";
+        const tagC=c.payState==="full"?"#16A34A":c.payState==="partial"?"#D97706":c.payState==="unpaid"?"#DC2626":"#9CA3AF";
+        const tagT=c.payState==="full"?"✓ Fully Paid":c.payState==="partial"?"◐ Partially Paid":c.payState==="unpaid"?"● Unpaid":"— N/A";
+        return<div key={c.x.id+"_"+c.lk} style={{...s.cd,borderRadius:16,padding:16,display:"flex",gap:12,alignItems:"flex-start"}}>
+          <div style={{width:44,height:44,borderRadius:12,background:lic?lic.f:"#EEF2FF",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{lic?lic.i:"📄"}</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{display:"flex",justifyContent:"space-between",gap:8}}>
+              <div style={{fontSize:14,fontWeight:800}}>{c.e.invoiceNo?"#"+c.e.invoiceNo:"No Invoice #"}</div>
+              <div style={{fontSize:16,fontWeight:900,color:"#4F46E5",whiteSpace:"nowrap"}}>{fmtINR(c.amt)}</div>
+            </div>
+            <div style={{fontSize:12,color:"#374151",fontWeight:600,marginTop:2}}>{c.x.name}</div>
+            <div style={{fontSize:11,color:"#9CA3AF"}}>{c.x.city} · {lic?lic.l:c.lk} · {vendor?vendor.l:"Unassigned"}</div>
+            <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}><Bg t={tagT} bg={tagBg} c={tagC}/></div>
+            {c.e.appliedDate&&<div style={{fontSize:11,color:"#9CA3AF",marginTop:6}}>Applied {c.e.appliedDate}</div>}
+            <div style={{fontSize:11,color:"#6B7280",marginTop:2}}>Paid {fmtINR(c.paid)} · Pending {c.excl?"—":fmtINR(c.remaining)}</div>
+            <div style={{marginTop:10,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+              <button onClick={()=>setBillModal({storeId:c.x.id,lk:c.lk})} style={{background:"#4F46E5",color:"#fff",border:"none",padding:"6px 14px",borderRadius:8,fontSize:11,fontWeight:700}}>✏️ Manage</button>
+              {c.e.billLink?<a href={c.e.billLink} target="_blank" rel="noopener noreferrer" style={{background:"#16A34A",color:"#fff",padding:"6px 14px",borderRadius:8,fontSize:11,fontWeight:700,textDecoration:"none"}}>📎 View Invoice</a>:<span style={{fontSize:11,color:"#D1D5DB"}}>No invoice yet</span>}
+            </div>
+          </div>
+        </div>;
+      })}
+    </div>
+    </>}
+
+    {/* ---- New Bill: pick store + license + team, then jump straight into Manage ---- */}
+    {newBillModal&&<div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:20}} onClick={()=>setNewBillModal(false)}>
+      <div style={{background:"#fff",borderRadius:20,padding:28,maxWidth:420,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,.25)"}} onClick={ev=>ev.stopPropagation()} className="fi">
+        <h3 style={{fontSize:17,fontWeight:800,marginBottom:16}}>➕ New Bill</h3>
+        <div style={{display:"grid",gap:12}}>
+          <div><label style={labelStyle}>Store</label><select value={nbStore} onChange={e=>{setNbStore(e.target.value);setNbLic("");}} style={s.i}>{st.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></div>
+          <div>
+            <label style={labelStyle}>License</label>
+            {!nbAddingNew?<>
+              <select value={nbLic} onChange={e=>{if(e.target.value==="__new__"){setNbAddingNew(true);}else{setNbLic(e.target.value);}}} style={s.i}>
+                <option value="">— Select License —</option>
+                {nbLicOptions.map(l=><option key={l.k} value={l.k}>{l.i} {l.l}{nbStoreObj&&!nbStoreObj.lics.includes(l.k)?" (will be added to this store)":""}</option>)}
+                <option value="__new__">➕ Create a new license type...</option>
+              </select>
+              <div style={{fontSize:11,color:"#9CA3AF",marginTop:4}}>Any license here — even ones this store doesn't have yet — can be picked; it'll be attached to the store automatically.</div>
+            </>:<div style={{display:"flex",gap:8}}>
+              <input value={nbNewLicName} onChange={e=>setNbNewLicName(e.target.value)} placeholder="New license type name..." style={s.i} onKeyDown={e=>e.key==="Enter"&&createNewLicenseType()}/>
+              <button onClick={createNewLicenseType} disabled={!nbNewLicName.trim()} style={{...s.bt,opacity:nbNewLicName.trim()?1:.4,whiteSpace:"nowrap"}}>Add</button>
+              <button onClick={()=>setNbAddingNew(false)} style={{background:"#F3F4F6",color:"#6B7280",border:"none",padding:"0 14px",borderRadius:10,fontWeight:700,fontSize:13}}>✕</button>
+            </div>}
+          </div>
+          <div><label style={labelStyle}>Compliance Team / Vendor</label><select value={nbVendor} onChange={e=>setNbVendor(e.target.value)} style={s.i}>
+            <option value="">— Select —</option>
+            <optgroup label="Compliance Teams">{VENDORS.map(v=><option key={v.k} value={v.k}>{v.l}</option>)}</optgroup>
+            <optgroup label="Excluded">{EXCL_VENDORS.map(v=><option key={v.k} value={v.k}>{v.l}</option>)}</optgroup>
+          </select></div>
+        </div>
+        <div style={{display:"flex",gap:10,marginTop:20}}>
+          <button onClick={createBill} disabled={!nbStore||!nbLic} style={{...s.bt,flex:1,opacity:(!nbStore||!nbLic)?.4:1,cursor:(!nbStore||!nbLic)?"not-allowed":"pointer"}}>Create &amp; Add Details →</button>
+          <button onClick={()=>setNewBillModal(false)} style={{background:"#F3F4F6",color:"#6B7280",border:"none",padding:"10px 22px",borderRadius:10,fontWeight:700,fontSize:13}}>Cancel</button>
+        </div>
+      </div>
+    </div>}
+
+    {/* ---- Manage Bill popup: vendor, applied date, amount, invoice #, G-Drive invoice link, payment history, pending ---- */}
+    {billModal&&(()=>{
+      const{storeId,lk}=billModal;
+      const x=st.find(z=>z.id===storeId);
+      const lic=L.find(z=>z.k===lk);
+      if(!x||!lic)return null;
+      const e=getLg(storeId,lk);
+      const amt=computedAmount(e,lk);
+      const excl=isExcludedVendor(e.vendor);
+      return<ManageBillModal storeId={storeId} lk={lk} x={x} lic={lic} e={e} amt={amt} excl={excl}
+        VENDORS={VENDORS} setLgField={setLgField} addPayment={addPayment} removePayment={removePayment}
+        computedAmount={computedAmount} onClose={()=>setBillModal(null)}/>;
+    })()}
+  </div></div>;
+}
+
+function ManageBillModal({storeId,lk,x,lic,e,amt,excl,VENDORS,setLgField,addPayment,removePayment,computedAmount,onClose}){
+  const[npAmt,setNpAmt]=useState("");
+  const[npDate,setNpDate]=useState(()=>new Date().toISOString().slice(0,10));
+  const[npNote,setNpNote]=useState("");
+  const labelStyle={fontSize:11,fontWeight:700,color:"#374151",display:"block",marginBottom:4};
+  const payments=e.payments||(Number(e.paidAmount)>0?[{amount:Number(e.paidAmount),date:e.paidDate||"—",note:"Earlier recorded payment"}]:[]);
+  const paidTotal=payments.reduce((a,p)=>a+(Number(p.amount)||0),0);
+  const pending=Math.max(amt-paidTotal,0);
+  const logQuickPct=(pct)=>{
+    const target=Math.round(amt*pct/100);
+    const delta=target-paidTotal;
+    if(delta<=0)return;
+    addPayment(storeId,lk,delta,new Date().toISOString().slice(0,10),"Quick "+pct+"% top-up");
+  };
+  const submitPayment=()=>{
+    if(!npAmt||Number(npAmt)<=0)return;
+    addPayment(storeId,lk,npAmt,npDate,npNote);
+    setNpAmt("");setNpNote("");
+  };
+  return<div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:20}} onClick={onClose}>
+    <div style={{background:"#fff",borderRadius:20,padding:28,maxWidth:540,width:"100%",maxHeight:"88vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.25)"}} onClick={ev=>ev.stopPropagation()} className="fi">
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
+        <div style={{width:46,height:46,borderRadius:14,background:lic.f,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>{lic.i}</div>
+        <div><h3 style={{fontSize:17,fontWeight:800}}>{lic.l}</h3><p style={{fontSize:12,color:"#6B7280"}}>{x.name} · {x.city}</p></div>
+        <button onClick={onClose} style={{marginLeft:"auto",background:"#F3F4F6",border:"none",width:34,height:34,borderRadius:10,fontSize:16,color:"#6B7280",flexShrink:0}}>×</button>
+      </div>
+      <div style={{display:"grid",gap:12}}>
+        <div>
+          <label style={labelStyle}>Compliance Team / Vendor</label>
+          <select value={e.vendor} onChange={ev=>setLgField(storeId,lk,"vendor",ev.target.value)} style={s.i}>
+            <option value="">— Select —</option>
+            <optgroup label="Compliance Teams">{VENDORS.map(v=><option key={v.k} value={v.k}>{v.l}</option>)}</optgroup>
+            <optgroup label="Excluded (₹0)">{EXCL_VENDORS.map(v=><option key={v.k} value={v.k}>{v.l}</option>)}</optgroup>
+          </select>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <div><label style={labelStyle}>Applied Date</label><input type="date" value={e.appliedDate||""} onChange={ev=>setLgField(storeId,lk,"appliedDate",ev.target.value)} style={s.i}/></div>
+          <div><label style={labelStyle}>Registration Type</label><select value={e.type} onChange={ev=>setLgField(storeId,lk,"type",ev.target.value)} style={s.i}>{LEDGER_TYPES.map(t=><option key={t.k} value={t.k}>{t.l}</option>)}</select></div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <div><label style={labelStyle}>Amount (₹)</label><input value={e.amount} onChange={ev=>setLgField(storeId,lk,"amount",ev.target.value)} placeholder={excl?"0":String(computedAmount({...e,amount:""},lk)||"")} style={s.i}/></div>
+          <div><label style={labelStyle}>Invoice Number</label><input value={e.invoiceNo||""} onChange={ev=>setLgField(storeId,lk,"invoiceNo",ev.target.value)} placeholder="e.g. INV-2026-014" style={s.i}/></div>
+        </div>
+        <div>
+          <label style={labelStyle}>Invoice / Bill Link (Google Drive)</label>
+          <div style={{display:"flex",gap:8}}>
+            <input value={e.billLink||""} onChange={ev=>setLgField(storeId,lk,"billLink",ev.target.value)} placeholder="Paste the G-Drive link to the invoice PDF..." style={s.i}/>
+            {e.billLink&&<a href={e.billLink} target="_blank" rel="noopener noreferrer" style={{background:"#16A34A",color:"#fff",padding:"0 16px",borderRadius:10,fontSize:12,fontWeight:700,textDecoration:"none",display:"flex",alignItems:"center",whiteSpace:"nowrap",flexShrink:0}}>Open↗</a>}
+          </div>
+        </div>
+        <div style={{background:"#F9FAFB",border:"1px solid #F3F4F6",borderRadius:12,padding:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
+            <div style={{fontSize:11,fontWeight:800,color:"#6B7280",textTransform:"uppercase",letterSpacing:".4px"}}>💳 Payment History</div>
+            <div style={{fontSize:12,color:"#6B7280"}}>Paid <strong style={{color:"#16A34A"}}>{fmtINR(paidTotal)}</strong> · Pending <strong style={{color:excl?"#9CA3AF":pending>0?"#DC2626":"#16A34A"}}>{excl?"—":fmtINR(pending)}</strong></div>
+          </div>
+          {payments.length>0?<div style={{display:"grid",gap:6,marginBottom:10,maxHeight:140,overflowY:"auto"}}>
+            {payments.map((p,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:8,background:"#fff",border:"1px solid #E5E7EB",borderRadius:8,padding:"6px 10px",fontSize:12}}>
+              <span style={{fontWeight:700,color:"#16A34A"}}>{fmtINR(p.amount)}</span>
+              <span style={{color:"#9CA3AF"}}>on {p.date||"—"}</span>
+              {p.note&&<span style={{color:"#9CA3AF",flex:1,fontStyle:"italic",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>· {p.note}</span>}
+              {(e.payments||[]).length>0&&<button onClick={()=>removePayment(storeId,lk,i)} style={{marginLeft:"auto",background:"#FEE2E2",color:"#DC2626",border:"none",borderRadius:6,padding:"3px 7px",fontSize:10,flexShrink:0}}>✕</button>}
+            </div>)}
+          </div>:<div style={{fontSize:12,color:"#9CA3AF",marginBottom:10}}>No payments logged yet.</div>}
+          {!excl&&<>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr auto",gap:8,alignItems:"end"}}>
+              <div><label style={labelStyle}>Amount (₹)</label><input value={npAmt} onChange={ev=>setNpAmt(ev.target.value)} placeholder="0" style={s.i}/></div>
+              <div><label style={labelStyle}>Date</label><input type="date" value={npDate} onChange={ev=>setNpDate(ev.target.value)} style={s.i}/></div>
+              <div><label style={labelStyle}>Note</label><input value={npNote} onChange={ev=>setNpNote(ev.target.value)} placeholder="optional" style={s.i}/></div>
+              <button onClick={submitPayment} style={{...s.gbt,height:38}}>+ Log</button>
+            </div>
+            {amt>0&&<div style={{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}}>{[25,50,75,100].map(p=><button key={p} onClick={()=>logQuickPct(p)} style={{background:"#EEF2FF",color:"#4F46E5",border:"none",borderRadius:8,padding:"5px 10px",fontSize:11,fontWeight:700}}>Top up to {p}%</button>)}</div>}
+          </>}
+        </div>
+        <div>
+          <label style={labelStyle}>Status</label>
+          <select value={e.status} onChange={ev=>setLgField(storeId,lk,"status",ev.target.value)} style={s.i}>{LEDGER_STATUSES.map(o=><option key={o}>{o}</option>)}</select>
+        </div>
+        <div>
+          <label style={labelStyle}>Notes</label>
+          <textarea value={e.notes} onChange={ev=>setLgField(storeId,lk,"notes",ev.target.value)} style={{...s.i,minHeight:60,resize:"vertical"}} placeholder="Anything to remember about this bill..."/>
+        </div>
+      </div>
+      <div style={{marginTop:18,display:"flex",justifyContent:"flex-end"}}>
+        <button onClick={onClose} style={{...s.bt,padding:"10px 26px"}}>Done</button>
+      </div>
+    </div>
+  </div>;
+}
+
+// ================= TASK SHEETS PAGE (multi-tab, per store per license) =================
+const SHEET_LIC_STATUSES=["NA","Applied","Doc Submitted","Application No Received","Under Process","Pending","Received","Rejected"];
+
+// ---- Step checklist templates: multi-stage licenses where each stage needs its own transparency ----
+const STEP_TEMPLATES={
+  clra:{label:"CLRA — full process",steps:[
+    "GST received",
+    "Shop & Establishment Act received",
+    "Rent Agreement / RC ready",
+    "RC submitted to hiring partner (vendor)",
+    "Form 5 & sheet received from vendor",
+    "Form filled & submitted back to vendor",
+    "CLRA certificate received from vendor",
+    "Certificate submitted to our compliance team",
+    "Compliance team submitted to govt. authority",
+    "CLRA license received"
+  ]},
+  fssai:{label:"FSSAI process",steps:[
+    "Documents collected","Application submitted","Inspection scheduled","Inspection completed","FSSAI license received"
+  ]},
+  fire:{label:"Fire NOC process",steps:[
+    "Site inspection requested","NOC application submitted","Site visit completed","Fire NOC received"
+  ]},
+  tradelicense:{label:"Trade License process",steps:[
+    "Documents collected","Application submitted","Site verification","Trade license received"
+  ]},
+  generic3:{label:"Generic — 3 step",steps:["Documents collected","Applied","Received"]},
+};
+function guessStepTemplate(name){
+  const n=(name||"").toLowerCase();
+  if(n.includes("clra"))return"clra";
+  if(n.includes("fssai"))return"fssai";
+  if(n.includes("fire"))return"fire";
+  if(n.includes("trade"))return"tradelicense";
+  return"";
+}
+
+function newSheet(name){
+  return{id:"sh_"+Date.now(),name:name||"New Tracker",brand:"",rows:[]};
+}
+function newSheetRow(storeName,city){
+  return{id:"row_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),storeName:storeName||"",city:city||"",assignDate:"",assignedBy:"",docsReceivedDate:"",licenses:[]};
+}
+function newLicItem(name){
+  return{id:"lic_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),name:name||"",applyDate:"",expectedBy:"",status:"NA",link:"",completed:false,stepsTemplate:"",customSteps:[],steps:{}};
+}
+
+function SheetsPage({sheets,setSheets,st,L,go,pg,u,lo}){
+  const[activeId,setActiveId]=useState(sheets[0]?.id||null);
+  useEffect(()=>{ if(!activeId&&sheets.length)setActiveId(sheets[0].id); },[sheets,activeId]);
+  const[showAll,setShowAll]=useState(false); // show completed items too
+  const[newSheetName,setNewSheetName]=useState("");
+  const[addSheetModal,setAddSheetModal]=useState(false);
+  const[newRowName,setNewRowName]=useState("");const[newRowCity,setNewRowCity]=useState("");
+  const[newLicNameFor,setNewLicNameFor]=useState({}); // rowId -> text
+  const[expandedSteps,setExpandedSteps]=useState(()=>new Set());
+  const toggleStepsPanel=(licId)=>setExpandedSteps(p=>{const n=new Set(p);n.has(licId)?n.delete(licId):n.add(licId);return n;});
+
+  // ---- editable step checklist helpers ----
+  const mapActiveLic=(rowId,licId,fn)=>{
+    setSheets(p=>p.map(s0=>{
+      if(s0.id!==active.id)return s0;
+      return{...s0,rows:s0.rows.map(r=>{
+        if(r.id!==rowId)return r;
+        return{...r,licenses:r.licenses.map(li=>li.id!==licId?li:fn(li))};
+      })};
+    }));
+  };
+  const setTemplate=(rowId,licId,key)=>{
+    mapActiveLic(rowId,licId,li=>{
+      if(!key)return{...li,stepsTemplate:"",customSteps:[],steps:{}};
+      const steps=key==="custom"?((li.customSteps&&li.customSteps.length)?li.customSteps:["Step 1"]):[...(STEP_TEMPLATES[key]&&STEP_TEMPLATES[key].steps?STEP_TEMPLATES[key].steps:[])];
+      return{...li,stepsTemplate:key,customSteps:steps,steps:{}};
+    });
+  };
+  const addStep=(rowId,licId)=>{
+    mapActiveLic(rowId,licId,li=>({...li,customSteps:[...(li.customSteps||[]),"New step"]}));
+  };
+  const removeStep=(rowId,licId,idx)=>{
+    mapActiveLic(rowId,licId,li=>{
+      const newSteps=(li.customSteps||[]).filter((_,i)=>i!==idx);
+      const remapped={};
+      Object.entries(li.steps||{}).forEach(([k,v])=>{
+        const ki=Number(k);
+        if(ki<idx)remapped[ki]=v; else if(ki>idx)remapped[ki-1]=v;
+      });
+      return{...li,customSteps:newSteps,steps:remapped};
+    });
+  };
+  const updStepLabel=(rowId,licId,idx,val)=>{
+    mapActiveLic(rowId,licId,li=>{
+      const cs=[...(li.customSteps||[])];cs[idx]=val;
+      return{...li,customSteps:cs};
+    });
+  };
+  const stepsListFor=(li)=>(li.customSteps&&li.customSteps.length)?li.customSteps:((li.stepsTemplate&&STEP_TEMPLATES[li.stepsTemplate])?STEP_TEMPLATES[li.stepsTemplate].steps:[]);
+
+  const active=sheets.find(x=>x.id===activeId)||null;
+
+  const addSheet=()=>{
+    if(!newSheetName.trim())return;
+    const sh=newSheet(newSheetName.trim());
+    setSheets(p=>[...p,sh]);
+    setActiveId(sh.id);
+    setNewSheetName("");setAddSheetModal(false);
+  };
+  const renameSheet=(id,name)=>setSheets(p=>p.map(s0=>s0.id===id?{...s0,name}:s0));
+  const delSheet=(id)=>{
+    setSheets(p=>p.filter(s0=>s0.id!==id));
+    if(activeId===id)setActiveId(null);
+  };
+
+  const addRow=()=>{
+    if(!newRowName.trim()||!active)return;
+    setSheets(p=>p.map(s0=>s0.id!==active.id?s0:{...s0,rows:[...s0.rows,newSheetRow(newRowName.trim(),newRowCity.trim())]}));
+    setNewRowName("");setNewRowCity("");
+  };
+  const delRow=(rowId)=>setSheets(p=>p.map(s0=>s0.id!==active.id?s0:{...s0,rows:s0.rows.filter(r=>r.id!==rowId)}));
+  const updRow=(rowId,k,v)=>setSheets(p=>p.map(s0=>s0.id!==active.id?s0:{...s0,rows:s0.rows.map(r=>r.id===rowId?{...r,[k]:v}:r)}));
+
+  const addLic=(rowId)=>{
+    const nm=(newLicNameFor[rowId]||"").trim();
+    if(!nm)return;
+    const row=active?.rows.find(r=>r.id===rowId);
+    if(row&&row.licenses.some(li=>li.name.trim().toLowerCase()===nm.toLowerCase())){
+      alert('"'+nm+'" is already added for this store — edit the existing row instead of adding it again.');
+      setNewLicNameFor(p=>({...p,[rowId]:""}));
+      return;
+    }
+    const guess=guessStepTemplate(nm);
+    setSheets(p=>p.map(s0=>s0.id!==active.id?s0:{...s0,rows:s0.rows.map(r=>r.id!==rowId?r:{...r,licenses:[...r.licenses,{...newLicItem(nm),stepsTemplate:guess}]})}));
+    setNewLicNameFor(p=>({...p,[rowId]:""}));
+  };
+  const updLic=(rowId,licId,k,v)=>setSheets(p=>p.map(s0=>s0.id!==active.id?s0:{...s0,rows:s0.rows.map(r=>r.id!==rowId?r:{...r,licenses:r.licenses.map(li=>li.id===licId?{...li,[k]:v}:li)})}));
+  const delLic=(rowId,licId)=>setSheets(p=>p.map(s0=>s0.id!==active.id?s0:{...s0,rows:s0.rows.map(r=>r.id!==rowId?r:{...r,licenses:r.licenses.filter(li=>li.id!==licId)})}));
+
+  // progress tracker: per license-name, count Received / total (excluding NA)
+  const progress=useMemo(()=>{
+    if(!active)return[];
+    const map={};
+    active.rows.forEach(r=>r.licenses.forEach(li=>{
+      if(li.status==="NA")return;
+      if(!map[li.name])map[li.name]={received:0,total:0};
+      map[li.name].total++;
+      if(li.status==="Received")map[li.name].received++;
+    }));
+    return Object.entries(map);
+  },[active]);
+
+  const exportOpen=()=>{
+    if(!active)return;
+    const out=[];
+    const stepRows=[];
+    active.rows.forEach(r=>r.licenses.forEach(li=>{
+      if(li.completed)return; // only OPEN items
+      const stepsList=(li.customSteps&&li.customSteps.length)?li.customSteps:(li.stepsTemplate&&STEP_TEMPLATES[li.stepsTemplate]?STEP_TEMPLATES[li.stepsTemplate].steps:[]);
+      const stepsProgress=stepsList.length?stepsList.filter((_,i)=>li.steps?.[i]?.done).length+"/"+stepsList.length:"—";
+      out.push({
+        "Store":r.storeName,"City":r.city,
+        "Assigned On":r.assignDate||"—","Assigned By":r.assignedBy||"—","All Docs Received":r.docsReceivedDate||"—",
+        "License":li.name,"Apply Date":li.applyDate||"—","Expected By":li.expectedBy||"—","Status":li.status,
+        "Step Checklist Progress":stepsProgress,"Docs Link (G-Drive)":li.link||"—"
+      });
+      stepsList.forEach((label,i)=>{
+        const st0=li.steps?.[i]||{};
+        stepRows.push({
+          "Store":r.storeName,"City":r.city,"License":li.name,
+          "Step #":i+1,"Step Description":label,
+          "Done?":st0.done?"✅ Yes":"⬜ No","Completed On":st0.date||"—"
+        });
+      });
+    }));
+    if(out.length===0){alert("No open items to export in this tracker.");return;}
+    downloadXLSXMulti([
+      {rows:out,name:"Open Items",headerColor:"6D28D9"},
+      {rows:stepRows,name:"Step Checklist Detail",headerColor:"7C3AED",mergeCols:["Store","License"]}
+    ],"Zippee_"+active.name.replace(/[^a-z0-9]+/gi,"_")+"_Open_"+new Date().toISOString().slice(0,10)+".xlsx");
+  };
+
+  const totalOpen=active?active.rows.reduce((a,r)=>a+r.licenses.filter(li=>!li.completed).length,0):0;
+  const totalDone=active?active.rows.reduce((a,r)=>a+r.licenses.filter(li=>li.completed).length,0):0;
+
+  return<div style={{background:"#F0F2F5",minHeight:"100vh"}}><NV pg={pg} go={go} n={st.length} u={u} lo={lo}/>
+  <div style={{padding:"20px 24px"}} className="fi">
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
+      <div><h2 style={{fontSize:22,fontWeight:800}}>✅ Task Trackers</h2><p style={{color:"#6B7280",fontSize:13}}>Sheet-wise store → license progress. Keep separate trackers per brand / batch, work on them side by side.</p></div>
+      <button onClick={()=>setAddSheetModal(true)} style={s.bt}>➕ New Tracker Sheet</button>
+    </div>
+
+    {/* tabs */}
+    <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+      {sheets.map(s0=><div key={s0.id} onClick={()=>setActiveId(s0.id)} style={{display:"flex",alignItems:"center",gap:6,background:activeId===s0.id?"linear-gradient(135deg,#4F46E5,#6366F1)":"#fff",color:activeId===s0.id?"#fff":"#374151",border:"1px solid "+(activeId===s0.id?"#4F46E5":"#E5E7EB"),padding:"8px 14px",borderRadius:12,cursor:"pointer",fontSize:12,fontWeight:700}}>
+        📋 {s0.name}
+        <span onClick={e=>{e.stopPropagation();if(confirm("Delete tracker \""+s0.name+"\"? This removes all its data."))delSheet(s0.id);}} style={{opacity:.7,fontSize:11}}>✕</span>
+      </div>)}
+      {sheets.length===0&&<span style={{color:"#9CA3AF",fontSize:13}}>No tracker sheets yet — create one to get started.</span>}
+    </div>
+
+    {active&&<>
+      <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+        <input value={active.name} onChange={e=>renameSheet(active.id,e.target.value)} style={{...s.i,maxWidth:280,fontWeight:700}}/>
+        <input value={active.brand} onChange={e=>setSheets(p=>p.map(s0=>s0.id!==active.id?s0:{...s0,brand:e.target.value}))} placeholder="Brand (optional)" style={{...s.i,maxWidth:160}}/>
+        <div style={{...s.cd,padding:"8px 16px",borderRadius:10,textAlign:"center"}}><strong style={{color:"#D97706"}}>{totalOpen}</strong> <span style={{fontSize:11,color:"#6B7280"}}>open</span></div>
+        <div style={{...s.cd,padding:"8px 16px",borderRadius:10,textAlign:"center"}}><strong style={{color:"#16A34A"}}>{totalDone}</strong> <span style={{fontSize:11,color:"#6B7280"}}>completed</span></div>
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,fontWeight:600,color:"#6B7280"}}><input type="checkbox" checked={showAll} onChange={e=>setShowAll(e.target.checked)}/> Show completed items</label>
+        <button onClick={exportOpen} style={{...s.gbt,marginLeft:"auto"}}>⬇️ Export Open Items</button>
+      </div>
+
+      {progress.length>0&&<div style={{...s.cd,padding:"12px 18px",marginBottom:16,borderRadius:14,display:"flex",gap:10,flexWrap:"wrap"}}>
+        <strong style={{fontSize:12,color:"#374151",marginRight:4}}>📊 Progress Tracker:</strong>
+        {progress.map(([name,p0])=><Bg key={name} t={name+": "+p0.received+"/"+p0.total} bg={p0.received===p0.total?"#DCFCE7":"#FEF3C7"} c={p0.received===p0.total?"#16A34A":"#D97706"}/>)}
+      </div>}
+
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+        <input value={newRowName} onChange={e=>setNewRowName(e.target.value)} placeholder="Store name..." list="storeNamesDL" style={{...s.i,maxWidth:220}} onKeyDown={e=>e.key==="Enter"&&addRow()}/>
+        <datalist id="storeNamesDL">{st.map(x=><option key={x.id} value={x.name}/>)}</datalist>
+        <input value={newRowCity} onChange={e=>setNewRowCity(e.target.value)} placeholder="City..." style={{...s.i,maxWidth:150}} onKeyDown={e=>e.key==="Enter"&&addRow()}/>
+        <button onClick={addRow} style={s.bt}>+ Add Store Row</button>
+      </div>
+
+      <div style={{display:"grid",gap:14}}>
+        {active.rows.length===0&&<div style={{...s.cd,textAlign:"center",padding:50,borderRadius:16}}><div style={{fontSize:44,marginBottom:10}}>🏪</div><p style={{color:"#6B7280",fontSize:13}}>Add a store row above to start tracking its licenses.</p></div>}
+        {active.rows.map(r=>{
+          const visLics=showAll?r.licenses:r.licenses.filter(li=>!li.completed);
+          return<div key={r.id} style={{...s.cd,borderRadius:16,padding:18}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+              <input value={r.storeName} onChange={e=>updRow(r.id,"storeName",e.target.value)} style={{...s.c,fontWeight:800,fontSize:14,minWidth:180}}/>
+              <input value={r.city} onChange={e=>updRow(r.id,"city",e.target.value)} placeholder="City" style={{...s.c,minWidth:100}}/>
+              <Bg t={r.licenses.filter(li=>!li.completed).length+" open / "+r.licenses.length+" total"} bg="#EEF2FF" c="#4F46E5"/>
+              <button onClick={()=>delRow(r.id)} style={{marginLeft:"auto",background:"#FEE2E2",color:"#DC2626",border:"none",padding:"5px 10px",borderRadius:6,fontSize:11,fontWeight:700}}>🗑️ Remove Store</button>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap",background:"#F9FAFB",border:"1px solid #F3F4F6",borderRadius:10,padding:"8px 10px"}}>
+              <label style={{fontSize:10,fontWeight:700,color:"#9CA3AF"}}>Assigned On</label><input type="date" value={r.assignDate||""} onChange={e=>updRow(r.id,"assignDate",e.target.value)} style={{...s.c}}/>
+              <label style={{fontSize:10,fontWeight:700,color:"#9CA3AF"}}>Assigned By</label><input value={r.assignedBy||""} onChange={e=>updRow(r.id,"assignedBy",e.target.value)} placeholder="Name" style={{...s.c,maxWidth:130}}/>
+              <label style={{fontSize:10,fontWeight:700,color:"#9CA3AF"}}>All Docs Received</label><input type="date" value={r.docsReceivedDate||""} onChange={e=>updRow(r.id,"docsReceivedDate",e.target.value)} style={{...s.c}}/>
+            </div>
+            {visLics.length>0&&<div style={{marginBottom:10}}>
+              <div style={{display:"grid",gridTemplateColumns:"160px 130px 130px 70px 140px 1fr 150px 150px 34px",gap:8,padding:"0 12px 6px",fontSize:10,fontWeight:800,color:"#9CA3AF",textTransform:"uppercase",letterSpacing:".4px"}}>
+                <div>License</div><div>Applied Date</div><div>Expected By</div><div>Days</div><div>Status</div><div>Docs Link (G-Drive)</div><div>Step Checklist</div><div>Action</div><div></div>
+              </div>
+              <div style={{display:"grid",gap:6}}>
+              {visLics.map(li=>{
+                const daysSince=li.applyDate?Math.floor((new Date()-new Date(li.applyDate))/864e5):null;
+                const overdue=li.expectedBy&&!li.completed&&new Date(li.expectedBy)<new Date();
+                const tmpl=li.stepsTemplate?STEP_TEMPLATES[li.stepsTemplate]:null;
+                const stepsList=stepsListFor(li);
+                const stepsDone=stepsList.filter((_,i)=>li.steps?.[i]?.done).length;
+                const isOpen=expandedSteps.has(li.id);
+                return<Fragment key={li.id}>
+                <div style={{display:"grid",gridTemplateColumns:"160px 130px 130px 70px 140px 1fr 150px 150px 34px",gap:8,alignItems:"center",padding:"8px 12px",background:li.completed?"#F0FDF4":"#FAFBFC",border:"1px solid "+(li.completed?"#BBF7D0":"#F3F4F6"),borderRadius:10}}>
+                <input value={li.name} onChange={e=>updLic(r.id,li.id,"name",e.target.value)} list="licNamesDL" style={{...s.c,fontWeight:700}}/>
+                <input type="date" value={li.applyDate} onChange={e=>updLic(r.id,li.id,"applyDate",e.target.value)} style={{...s.c}}/>
+                <input type="date" value={li.expectedBy} onChange={e=>updLic(r.id,li.id,"expectedBy",e.target.value)} style={{...s.c,background:overdue?"#FEE2E2":"#FAFBFC"}}/>
+                <div style={{fontSize:11,fontWeight:700,color:overdue?"#DC2626":"#6B7280",textAlign:"center"}}>{daysSince!==null?daysSince+"d":"—"}</div>
+                <select value={li.status} onChange={e=>updLic(r.id,li.id,"status",e.target.value)} style={{...s.c}}>{SHEET_LIC_STATUSES.map(o=><option key={o}>{o}</option>)}</select>
+                <div style={{display:"flex",gap:6}}><input value={li.link} onChange={e=>updLic(r.id,li.id,"link",e.target.value)} placeholder="G-Drive link..." style={{...s.c,flex:1,minWidth:0}}/>{li.link&&<a href={li.link} target="_blank" rel="noopener noreferrer" style={{background:"#16A34A",color:"#fff",padding:"5px 10px",borderRadius:6,fontSize:11,fontWeight:700,textDecoration:"none",whiteSpace:"nowrap"}}>Open↗</a>}</div>
+                <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                  <select value={li.stepsTemplate||""} onChange={e=>setTemplate(r.id,li.id,e.target.value)} style={{...s.c,fontSize:10,padding:"3px 4px"}}>
+                    <option value="">No step checklist</option>
+                    {Object.entries(STEP_TEMPLATES).map(([k,t])=><option key={k} value={k}>{t.label}</option>)}
+                    <option value="custom">✏️ Custom checklist</option>
+                  </select>
+                  {stepsList.length>0&&<button onClick={()=>toggleStepsPanel(li.id)} style={{background:stepsDone===stepsList.length?"#DCFCE7":"#FEF3C7",color:stepsDone===stepsList.length?"#16A34A":"#D97706",border:"none",borderRadius:6,padding:"2px 6px",fontSize:10,fontWeight:700}}>{stepsDone}/{stepsList.length} steps {isOpen?"▲":"▼"}</button>}
+                </div>
+                <button onClick={()=>updLic(r.id,li.id,"completed",!li.completed)} style={{background:li.completed?"#F3F4F6":"linear-gradient(135deg,#16A34A,#22C55E)",color:li.completed?"#6B7280":"#fff",border:"none",padding:"6px 10px",borderRadius:8,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{li.completed?"↩️ Reopen":"✓ Complete"}</button>
+                <button onClick={()=>delLic(r.id,li.id)} style={{background:"#FEE2E2",color:"#DC2626",border:"none",padding:"6px 8px",borderRadius:6,fontSize:11}}>🗑️</button>
+              </div>
+              {stepsList.length>0&&isOpen&&<div style={{background:"#F5F3FF",border:"1.5px solid #DDD6FE",borderRadius:10,padding:"10px 14px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
+                  <div style={{fontSize:11,fontWeight:800,color:"#7C3AED"}}>📋 Step checklist for "{li.name}" ({stepsDone}/{stepsList.length} done) — editable</div>
+                  <span style={{fontSize:10,color:"#9CA3AF"}}>rename, reorder-by-editing, add or remove steps as needed for this store</span>
+                </div>
+                <div style={{marginBottom:8}}><Bar v={Math.round(stepsDone/stepsList.length*100)} c="#7C3AED" h={6}/></div>
+                <div style={{display:"grid",gap:6}}>
+                  {stepsList.map((stepLabel,i)=>{const st0=li.steps?.[i]||{done:false,date:""};return<div key={i} style={{display:"flex",alignItems:"center",gap:8,background:"#fff",borderRadius:8,padding:"6px 10px",border:"1px solid #EDE9FE"}}>
+                    <input type="checkbox" checked={!!st0.done} onChange={e=>updLic(r.id,li.id,"steps",{...(li.steps||{}),[i]:{...st0,done:e.target.checked}})} style={{width:16,height:16,accentColor:"#7C3AED",flexShrink:0}}/>
+                    <span style={{fontSize:11,color:"#9CA3AF",fontWeight:700,width:16,flexShrink:0}}>{i+1}.</span>
+                    <input value={stepLabel} onChange={e=>updStepLabel(r.id,li.id,i,e.target.value)} style={{...s.c,flex:1,fontWeight:600,color:st0.done?"#16A34A":"#374151"}}/>
+                    <input type="date" value={st0.date||""} onChange={e=>updLic(r.id,li.id,"steps",{...(li.steps||{}),[i]:{...st0,date:e.target.value}})} style={{...s.c,fontSize:11,flexShrink:0}}/>
+                    <button onClick={()=>removeStep(r.id,li.id,i)} title="Remove this step" style={{background:"#FEE2E2",color:"#DC2626",border:"none",borderRadius:6,padding:"4px 7px",fontSize:10,flexShrink:0}}>✕</button>
+                  </div>;})}
+                </div>
+                <div style={{marginTop:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <button onClick={()=>addStep(r.id,li.id)} style={{background:"#EEF2FF",color:"#4F46E5",border:"none",padding:"5px 12px",borderRadius:6,fontSize:11,fontWeight:700}}>+ Add step</button>
+                  <button onClick={()=>{updLic(r.id,li.id,"stepsTemplate","");updLic(r.id,li.id,"customSteps",[]);updLic(r.id,li.id,"steps",{});}} style={{background:"#FEE2E2",color:"#DC2626",border:"none",padding:"4px 10px",borderRadius:6,fontSize:10,fontWeight:700}}>Remove checklist</button>
+                </div>
+              </div>}
+              </Fragment>;})}
+              </div>
+            </div>}
+            <div style={{display:"flex",gap:6}}>
+              <input value={newLicNameFor[r.id]||""} onChange={e=>setNewLicNameFor(p=>({...p,[r.id]:e.target.value}))} list="licNamesDL" placeholder="License name (e.g. FSSAI, Trade License...)" style={{...s.i,maxWidth:280}} onKeyDown={e=>e.key==="Enter"&&addLic(r.id)}/>
+              <button onClick={()=>addLic(r.id)} style={{background:"#EEF2FF",color:"#4F46E5",border:"none",padding:"9px 16px",borderRadius:10,fontWeight:700,fontSize:12}}>+ Add License</button>
+            </div>
+          </div>;
+        })}
+      </div>
+      <datalist id="licNamesDL">{L.map(l=><option key={l.k} value={l.l}/>)}</datalist>
+    </>}
+
+    {addSheetModal&&<div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}} onClick={()=>setAddSheetModal(false)}>
+      <div style={{background:"#fff",borderRadius:20,padding:32,maxWidth:420,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,.2)"}} onClick={e=>e.stopPropagation()} className="fi">
+        <h3 style={{fontSize:18,fontWeight:800,marginBottom:16}}>➕ New Tracker Sheet</h3>
+        <p style={{color:"#6B7280",fontSize:13,marginBottom:14}}>Use separate sheets to manage different brands or launch batches independently — e.g. "Brand A — New Store Onboarding" and "Brand B — Q3 Renewals".</p>
+        <input value={newSheetName} onChange={e=>setNewSheetName(e.target.value)} placeholder="Tracker name..." style={{...s.i,marginBottom:16}} onKeyDown={e=>e.key==="Enter"&&addSheet()}/>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={addSheet} disabled={!newSheetName.trim()} style={{...s.bt,flex:1,opacity:newSheetName.trim()?1:.4}}>Create</button>
+          <button onClick={()=>setAddSheetModal(false)} style={{background:"#F3F4F6",color:"#6B7280",border:"none",padding:"10px 22px",borderRadius:10,fontWeight:700,fontSize:13}}>Cancel</button>
+        </div>
+      </div>
+    </div>}
+  </div></div>;
+}
+
+ReactDOM.render(<App/>,document.getElementById("root"));
+</script>
+</body>
+</html>
